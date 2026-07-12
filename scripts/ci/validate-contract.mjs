@@ -7,6 +7,7 @@ import { parse } from 'yaml'
 const QUALITY_SCRIPTS = ['lint', 'typecheck', 'test', 'test:infra', 'build']
 const DELIVERY_SOURCES = ['index.ts', 'github.ts', 'pulumi-oidc.ts']
 const DELIVERY_DEPENDENCIES = ['@pulumi/github', '@pulumi/pulumiservice']
+const REQUIRED_OPERATIONS_SCRIPTS = ['bootstrap-foundation-secret.sh']
 
 function readJson(path, displayPath, errors) {
   if (!existsSync(path)) {
@@ -81,6 +82,13 @@ export function validateContract(root) {
 
   for (const source of DELIVERY_SOURCES) {
     const displayPath = `infra/src/delivery/${source}`
+    if (!existsSync(resolve(root, displayPath))) {
+      errors.push(`${displayPath} must exist`)
+    }
+  }
+
+  for (const script of REQUIRED_OPERATIONS_SCRIPTS) {
+    const displayPath = `scripts/ops/${script}`
     if (!existsSync(resolve(root, displayPath))) {
       errors.push(`${displayPath} must exist`)
     }
