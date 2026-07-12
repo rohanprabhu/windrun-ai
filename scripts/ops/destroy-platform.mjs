@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 
 import { createPulumiOperations, stackRef } from './lib/pulumi.mjs'
+import { hasExactlyOneActiveGitHubLogin } from './lib/github-auth.mjs'
 
 const MANAGED_BACKEND = 'https://api.pulumi.com'
 const EXPECTED_GITHUB_LOGIN = 'rohanprabhu'
@@ -567,35 +568,6 @@ function readPulumiToken(credentials) {
   return token
 }
 
-function hasActiveGitHubLogin(rawStatus) {
-  const lines = rawStatus.split(/\r?\n/u)
-  const activeLogins = []
-  let login
-  let active = false
-
-  function finishAccount() {
-    if (login && active) activeLogins.push(login)
-  }
-
-  for (const line of lines) {
-    const account = line.match(
-      /Logged in to github\.com account ([^\s(]+)/u,
-    )
-    if (account) {
-      finishAccount()
-      login = account[1]
-      active = false
-    } else if (/Active account:\s*true\b/u.test(line)) {
-      active = true
-    }
-  }
-  finishAccount()
-  return (
-    activeLogins.length === 1 &&
-    activeLogins[0] === EXPECTED_GITHUB_LOGIN
-  )
-}
-
 function redactCredentials(value, credentials) {
   let redacted = value
   for (const credential of [...new Set(credentials)]
@@ -635,7 +607,8 @@ async function safePulumi(runPulumi, args, options, label) {
     const result = await runPulumi(args, options)
     if (typeof result !== 'string') throw new Error('invalid result')
     return result
-  } catch {
+  } catch (error) {
+    if (error?.code === 'PULUMI_MUTATION_STATE_UNKNOWN') throw error
     throw new PlatformSafetyError(`${label} failed`)
   }
 }
@@ -651,7 +624,8 @@ async function safeLifecycle(
     return normalizeCommandResult(
       await runLifecycleCommand(command, args, options),
     )
-  } catch {
+  } catch (error) {
+    if (error?.code === 'PULUMI_MUTATION_STATE_UNKNOWN') throw error
     throw new PlatformSafetyError(`${label} failed`)
   }
 }
@@ -752,8 +726,9 @@ async function readDeliveryCredentials({
     'gh auth status',
   )
   if (
-    !hasActiveGitHubLogin(
+    !hasExactlyOneActiveGitHubLogin(
       `${githubStatus.stdout}\n${githubStatus.stderr}`,
+      EXPECTED_GITHUB_LOGIN,
     )
   ) {
     throw new PlatformSafetyError(
@@ -1112,6 +1087,9 @@ export async function destroyPlatform({
       )
     }
   } catch (error) {
+    if (error?.code === 'PULUMI_MUTATION_STATE_UNKNOWN') {
+      throw error
+    }
     const primary =
       error instanceof PlatformSafetyError
         ? error

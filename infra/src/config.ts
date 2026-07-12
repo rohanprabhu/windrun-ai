@@ -24,6 +24,8 @@ const allowedConfigKeys: Record<StackKind, ReadonlySet<keyof RawStackConfig>> = 
   delivery: new Set([
     "stackKind",
     "enablePulumiGithubOidc",
+    "productionCiEnabled",
+    "stagingCiEnabled",
     "pulumiOrganization",
   ]),
   "production-edge": new Set(["stackKind"]),

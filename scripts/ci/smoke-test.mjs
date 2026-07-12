@@ -1,5 +1,13 @@
 import { pathToFileURL } from 'node:url'
 
+import {
+  boundedHttpRequest,
+  HttpBodyTooLargeError,
+  HttpEndpointError,
+  HttpTimeoutError,
+  OperationDeadline,
+} from '../lib/bounded-http.mjs'
+
 const retryableStatuses = new Set([404, 429, 500, 502, 503, 504])
 
 function positiveInteger(value, label) {
@@ -44,13 +52,18 @@ export function readCliArguments(args = process.argv.slice(2)) {
   }
 }
 
-function wait(delayMs) {
-  return new Promise((resolve) => setTimeout(resolve, delayMs))
-}
-
 export async function smokeTest(
   url,
-  { attempts, delayMs, fetchImpl = fetch, sleep = wait },
+  {
+    attempts,
+    delayMs,
+    fetchImpl = fetch,
+    sleep,
+    requestTimeoutMs = 15_000,
+    overallTimeoutMs =
+      attempts * 15_000 + Math.max(0, attempts - 1) * delayMs + 1_000,
+    maxBodyBytes = 64 * 1024,
+  },
 ) {
   if (!Number.isSafeInteger(attempts) || attempts < 1) {
     throw new Error('attempts must be a positive integer')
@@ -58,28 +71,64 @@ export async function smokeTest(
   if (!Number.isSafeInteger(delayMs) || delayMs < 0) {
     throw new Error('delayMs must be a non-negative integer')
   }
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1) {
+    throw new Error('requestTimeoutMs must be a positive integer')
+  }
+  if (!Number.isSafeInteger(overallTimeoutMs) || overallTimeoutMs < 1) {
+    throw new Error('overallTimeoutMs must be a positive integer')
+  }
+  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1) {
+    throw new Error('maxBodyBytes must be a positive integer')
+  }
 
   let finalStatus
+  let finalTimedOut = false
+  const deadline = new OperationDeadline(
+    overallTimeoutMs,
+    'Smoke test overall deadline',
+  )
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    let response
+    let result
     try {
-      response = await fetchImpl(url, { cache: 'no-store' })
-    } catch {
+      result = await boundedHttpRequest({
+        fetchImpl,
+        url,
+        init: { cache: 'no-store' },
+        label: 'Smoke request',
+        requestTimeoutMs,
+        maxBodyBytes,
+        body: 'text',
+        deadline,
+      })
+    } catch (error) {
+      if (
+        error instanceof HttpBodyTooLargeError ||
+        error instanceof HttpEndpointError
+      ) {
+        throw error
+      }
       finalStatus = undefined
+      finalTimedOut = error instanceof HttpTimeoutError
       if (attempt < attempts) {
-        await sleep(delayMs)
+        if (sleep) {
+          await deadline.wait(sleep(delayMs))
+        } else {
+          await deadline.delay(delayMs)
+        }
         continue
       }
       break
     }
 
+    const { response, text } = result
     finalStatus = response.status
+    finalTimedOut = false
 
     if (response.status === 200) {
       let payload
       try {
-        payload = await response.json()
+        payload = JSON.parse(text)
       } catch {
         throw new Error('Smoke test received invalid JSON at status 200')
       }
@@ -98,12 +147,20 @@ export async function smokeTest(
     }
 
     if (attempt < attempts) {
-      await sleep(delayMs)
+      if (sleep) {
+        await deadline.wait(sleep(delayMs))
+      } else {
+        await deadline.delay(delayMs)
+      }
     }
   }
 
   const finalResult =
-    finalStatus === undefined ? 'network error' : `status ${finalStatus}`
+    finalTimedOut
+      ? 'request timeout'
+      : finalStatus === undefined
+        ? 'network error'
+        : `status ${finalStatus}`
   throw new Error(
     `Smoke test failed after ${attempts} attempt(s): final ${finalResult}`,
   )

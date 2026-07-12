@@ -163,3 +163,12 @@ if (process.argv[2] === 'stack' && process.argv[3] === 'ls') {
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test('preview cleanup delegates all process execution to the shared lifecycle boundary', () => {
+  const source = readFileSync(
+    new URL('./destroy-preview.mjs', import.meta.url),
+    'utf8',
+  )
+  assert.doesNotMatch(source, /node:child_process|spawnSync|execFile|execSync/u)
+  assert.match(source, /createPulumiOperations/u)
+})

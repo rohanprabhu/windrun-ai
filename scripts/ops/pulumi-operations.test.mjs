@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -16,9 +17,15 @@ import { fileURLToPath } from 'node:url'
 
 import {
   createPulumiOperations,
+  PulumiMutationStateUnknownError,
+  runManagedProcess,
   stackRef,
 } from './lib/pulumi.mjs'
-import { bootstrapPlatform, PHASE_ONE_STACKS } from './bootstrap-platform.mjs'
+import {
+  bootstrapPlatform,
+  FOUNDATION_BOOTSTRAP_OUTPUTS,
+  PHASE_ONE_STACKS,
+} from './bootstrap-platform.mjs'
 import { destroyEnvironment } from './destroy-environment.mjs'
 import { destroyPlatform } from './destroy-platform.mjs'
 
@@ -108,22 +115,30 @@ function createProcessHarness({
   return { calls, processRunner }
 }
 
+function jsonResponseAtUrl(url, payload, status = 200) {
+  const response = new Response(JSON.stringify(payload), { status })
+  Object.defineProperty(response, 'url', {
+    configurable: true,
+    value: String(url),
+  })
+  return response
+}
+
 function createOperations({
   harness = createProcessHarness(),
-  fetchImpl = async () => ({
-    ok: true,
-    async json() {
-      return { email: OWNER_EMAIL }
-    },
-  }),
+  fetchImpl = async (url) => jsonResponseAtUrl(url, { email: OWNER_EMAIL }),
   environment = { PATH: process.env.PATH, SAFE_ADC: 'inherited' },
   repositoryRoot = '/workspace/windrun-ai',
+  requestTimeoutMs,
+  maxUserinfoBytes,
 } = {}) {
   const operations = createPulumiOperations({
     processRunner: harness.processRunner,
     fetchImpl,
     environment,
     repositoryRoot,
+    requestTimeoutMs,
+    maxUserinfoBytes,
   })
   return { harness, operations }
 }
@@ -142,7 +157,15 @@ test('runPulumi always uses infra cwd and inherits ADC environment', async () =>
 
   await operations.runPulumi(['preview', '--stack', 'org/windrun-ai/staging'])
 
-  assert.deepEqual(harness.calls, [
+  assert.equal(harness.calls.length, 1)
+  assert.deepEqual(
+    {
+      ...harness.calls[0],
+      env: {
+        PATH: harness.calls[0].env.PATH,
+        SAFE_ADC: harness.calls[0].env.SAFE_ADC,
+      },
+    },
     {
       executable: 'pulumi',
       args: ['preview', '--stack', 'org/windrun-ai/staging'],
@@ -150,7 +173,39 @@ test('runPulumi always uses infra cwd and inherits ADC environment', async () =>
       env: { PATH: process.env.PATH, SAFE_ADC: 'inherited' },
       capture: true,
     },
-  ])
+  )
+  assert.match(harness.calls[0].env.DOCKER_CONFIG, /windrun-docker-config-/u)
+})
+
+test('runPulumi uses and removes an isolated gcloud Docker credential-helper config', async () => {
+  const calls = []
+  let dockerConfigPath
+  const operations = createPulumiOperations({
+    environment: {
+      PATH: process.env.PATH,
+      DOCKER_CONFIG: '/untrusted/operator/docker-config',
+    },
+    repositoryRoot: '/workspace/windrun-ai',
+    async processRunner(executable, args, options) {
+      calls.push({ executable, args: [...args], env: { ...options.env } })
+      dockerConfigPath = options.env.DOCKER_CONFIG
+      assert.notEqual(dockerConfigPath, '/untrusted/operator/docker-config')
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(dockerConfigPath, 'config.json'), 'utf8')),
+        {
+          credHelpers: {
+            'asia-south1-docker.pkg.dev': 'gcloud',
+          },
+        },
+      )
+      return { stdout: '', stderr: '' }
+    },
+  })
+
+  await operations.runPulumi(['preview', '--stack', 'org/windrun-ai/staging'])
+
+  assert.equal(calls.length, 1)
+  assert.equal(existsSync(dockerConfigPath), false)
 })
 
 test('production refuses a PULUMI_BIN whose basename is not pulumi', async () => {
@@ -164,6 +219,100 @@ test('production refuses a PULUMI_BIN whose basename is not pulumi', async () =>
   await assert.rejects(
     operations.runPulumi(['version']),
     /PULUMI_BIN basename must be exactly pulumi/,
+  )
+})
+
+test('managed child runner bounds a process that ignores TERM', async () => {
+  const startedAt = Date.now()
+  await assert.rejects(
+    runManagedProcess(
+      process.execPath,
+      [
+        '-e',
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)",
+      ],
+      {
+        capture: true,
+        timeoutMs: 30,
+        killGraceMs: 20,
+        maxOutputBytes: 1024,
+        mutationMayHaveStarted: false,
+      },
+    ),
+    (error) => {
+      assert.equal(error.code, 'COMMAND_TIMEOUT')
+      assert.doesNotMatch(error.message, /setInterval|SIGTERM/u)
+      return true
+    },
+  )
+  assert.ok(Date.now() - startedAt < 500)
+})
+
+test('managed child runner bounds output and marks killed mutations unknown', async () => {
+  await assert.rejects(
+    runManagedProcess(
+      process.execPath,
+      ['-e', "process.stdout.write('x'.repeat(4096)); setInterval(() => {}, 1000)"],
+      {
+        capture: true,
+        timeoutMs: 1_000,
+        killGraceMs: 20,
+        maxOutputBytes: 512,
+        mutationMayHaveStarted: true,
+      },
+    ),
+    (error) => {
+      assert.equal(error.code, 'PULUMI_MUTATION_STATE_UNKNOWN')
+      assert.equal(error instanceof PulumiMutationStateUnknownError, true)
+      assert.doesNotMatch(error.message, /x{10}/u)
+      return true
+    },
+  )
+})
+
+test('runPulumi classifies read-only timeouts separately from unknown mutations', async () => {
+  const classifications = []
+  const operations = createPulumiOperations({
+    repositoryRoot: '/workspace/windrun-ai',
+    environment: { PATH: process.env.PATH },
+    async processRunner(_executable, args, options) {
+      classifications.push({ args: [...args], unknown: options.mutationMayHaveStarted })
+      if (options.mutationMayHaveStarted) {
+        throw new PulumiMutationStateUnknownError()
+      }
+      const error = new Error('secret child detail must not escape')
+      error.code = 'COMMAND_TIMEOUT'
+      throw error
+    },
+  })
+
+  for (const args of [
+    ['preview', '--stack', 'org/windrun-ai/production'],
+    ['stack', 'export', '--stack', 'org/windrun-ai/production'],
+    ['stack', 'ls', '--json'],
+    ['config', '--json', '--stack', 'org/windrun-ai/production'],
+  ]) {
+    await assert.rejects(operations.runPulumi(args), (error) => {
+      assert.equal(error.code, 'COMMAND_TIMEOUT')
+      return true
+    })
+  }
+  for (const args of [
+    ['up', '--yes', '--stack', 'org/windrun-ai/production'],
+    ['destroy', '--yes', '--stack', 'org/windrun-ai/production'],
+    ['config', 'set', 'key', 'value', '--stack', 'org/windrun-ai/production'],
+    ['stack', 'select', '--create', 'org/windrun-ai/production'],
+    ['unknown-verb'],
+  ]) {
+    await assert.rejects(operations.runPulumi(args), (error) => {
+      assert.equal(error.code, 'PULUMI_MUTATION_STATE_UNKNOWN')
+      assert.doesNotMatch(error.message, /secret child detail/u)
+      return true
+    })
+  }
+  assert.deepEqual(
+    classifications.map(({ unknown }) => unknown),
+    [false, false, false, false, true, true, true, true, true],
   )
 })
 
@@ -245,12 +394,7 @@ test('assertExactGoogleIdentity permits only exact active gcloud and ADC identit
         url,
         options: { headers: { ...options.headers } },
       })
-      return {
-        ok: true,
-        async json() {
-          return { email: OWNER_EMAIL }
-        },
-      }
+      return jsonResponseAtUrl(url, { email: OWNER_EMAIL })
     },
   })
 
@@ -294,18 +438,138 @@ test('assertExactGoogleIdentity refuses either mismatched identity without loggi
   )
 
   const wrongAdc = createOperations({
-    fetchImpl: async () => ({
-      ok: true,
-      async json() {
-        return { email: 'other@example.com' }
-      },
-    }),
+    fetchImpl: async (url) =>
+      jsonResponseAtUrl(url, { email: 'other@example.com' }),
   })
   await assert.rejects(
     wrongAdc.operations.assertExactGoogleIdentity(),
     /ADC identity must be exactly rohan@windrun\.ai/,
   )
 })
+
+test('assertExactGoogleIdentity rejects non-success userinfo even with the expected email', async () => {
+  const { operations } = createOperations({
+    fetchImpl: async (url) =>
+      jsonResponseAtUrl(url, { email: OWNER_EMAIL }, 401),
+  })
+
+  await assert.rejects(
+    operations.assertExactGoogleIdentity(),
+    /ADC identity lookup failed/,
+  )
+})
+
+test('assertExactGoogleIdentity bounds userinfo headers, bodies, and size', async () => {
+  const cases = [
+    async () => new Promise(() => {}),
+    async () => ({
+      ok: true,
+      status: 200,
+      url: 'https://openidconnect.googleapis.com/v1/userinfo',
+      headers: new Headers(),
+      body: new ReadableStream({ start() {} }),
+      async json() {
+        return new Promise(() => {})
+      },
+    }),
+    async (url) =>
+      jsonResponseAtUrl(
+        url,
+        { email: OWNER_EMAIL, padding: 'x'.repeat(70_000) },
+      ),
+  ]
+
+  for (const fetchImpl of cases) {
+    const { operations } = createOperations({
+      fetchImpl,
+      requestTimeoutMs: 20,
+      maxUserinfoBytes: 1_024,
+    })
+    const outcome = await Promise.race([
+      operations.assertExactGoogleIdentity().then(
+        () => ({ status: 'fulfilled' }),
+        (error) => ({ status: 'rejected', error }),
+      ),
+      new Promise((resolve) =>
+        setTimeout(() => resolve({ status: 'pending' }), 500),
+      ),
+    ])
+    assert.equal(outcome.status, 'rejected')
+    assert.match(outcome.error.message, /ADC identity lookup failed/)
+  }
+})
+
+for (const credentialName of [
+  'GOOGLE_CREDENTIALS',
+  'GOOGLE_CLOUD_KEYFILE_JSON',
+  'GCLOUD_KEYFILE_JSON',
+  'GOOGLE_OAUTH_ACCESS_TOKEN',
+  'GOOGLE_IMPERSONATE_SERVICE_ACCOUNT',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
+  'CLOUDSDK_AUTH_ACCESS_TOKEN',
+  'CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT',
+  'PULUMI_CONFIG',
+]) {
+  test(`assertExactGoogleIdentity refuses ambient ${credentialName} before invoking gcloud`, async () => {
+    const harness = createProcessHarness()
+    const { operations } = createOperations({
+      harness,
+      environment: {
+        PATH: process.env.PATH,
+        [credentialName]: 'alternate-provider-credential',
+      },
+    })
+
+    await assert.rejects(
+      operations.assertExactGoogleIdentity(),
+      new RegExp(`${credentialName} is not permitted`),
+    )
+    assert.deepEqual(harness.calls, [])
+  })
+}
+
+for (const providerKey of [
+  'gcp:credentials',
+  'gcp:accessToken',
+  'gcp:impersonateServiceAccount',
+  'gcp:impersonateServiceAccountDelegates',
+]) {
+  test(`assertExactGoogleIdentity refuses ${providerKey} in Pulumi stack config`, async () => {
+    const harness = createProcessHarness()
+    const originalRunner = harness.processRunner
+    harness.processRunner = async (executable, args, options) => {
+      if (args[0] === 'config' && args[1] === '--json') {
+        harness.calls.push({
+          executable,
+          args: [...args],
+          cwd: options.cwd,
+          env: { ...options.env },
+          capture: options.capture,
+        })
+        return {
+          stdout: JSON.stringify({
+            [providerKey]: { value: 'alternate-provider-credential' },
+          }),
+          stderr: '',
+        }
+      }
+      return originalRunner(executable, args, options)
+    }
+    const { operations } = createOperations({ harness })
+
+    await assert.rejects(
+      operations.assertExactGoogleIdentity({
+        stackRefs: ['claimed-user/windrun-ai/production'],
+      }),
+      new RegExp(`${providerKey} is not permitted`),
+    )
+    assert.equal(
+      harness.calls.some(({ args }) => args[0] === 'config'),
+      true,
+    )
+  })
+}
 
 test('the lifecycle command boundary exposes no generic gcloud runner', async () => {
   const { operations } = createOperations()
@@ -370,6 +634,7 @@ if (process.argv.slice(2).join(' ') === 'whoami --json') {
       async runPnpmScript(script) {
         events.push(`pnpm:${script}`)
       },
+      validateCheckpoint() {},
       log(message) {
         messages.push(message)
       },
@@ -435,7 +700,54 @@ if (process.argv.slice(2).join(' ') === 'whoami --json') {
   }
 })
 
-test('bootstrap default previews all five stacks without applying or selecting delivery', async () => {
+test('clean bootstrap preview stops safely after foundation when outputs do not exist', async () => {
+  const calls = []
+  const messages = []
+
+  const result = await bootstrapPlatform({
+    argv: [],
+    async runPulumi(args) {
+      calls.push([...args])
+      if (args[0] === 'whoami') {
+        return JSON.stringify({ user: LOGIN, url: 'https://api.pulumi.com' })
+      }
+      if (args[0] === 'stack' && args[1] === 'output') {
+        return '{}'
+      }
+      return ''
+    },
+    stackRef,
+    async assertGoogleIdentity() {},
+    async readGitHead() {
+      return GIT_SHA
+    },
+    async runPnpmScript() {},
+    log(message) {
+      messages.push(message)
+    },
+  })
+
+  assert.deepEqual(
+    calls.filter((args) => args[0] === 'preview').map((args) => args.at(-1)),
+    [stackRef(LOGIN, 'foundation')],
+  )
+  assert.equal(calls.some((args) => args[0] === 'up'), false)
+  assert.equal(calls.some((args) => args.join(' ').includes('delivery')), false)
+  assert.equal(
+    calls.some(
+      (args) =>
+        (args[0] === 'stack' && args[1] === 'select' &&
+          args.at(-1) !== stackRef(LOGIN, 'foundation')) ||
+        (args[0] === 'config' &&
+          args.at(-1) !== stackRef(LOGIN, 'foundation')),
+    ),
+    false,
+  )
+  assert.deepEqual(result.stacks, ['foundation'])
+  assert.match(messages.at(-1), /DOWNSTREAM PREVIEWS PENDING/u)
+})
+
+test('bootstrap preview continues to all consumers when foundation outputs exist', async () => {
   const calls = []
 
   await bootstrapPlatform({
@@ -444,6 +756,13 @@ test('bootstrap default previews all five stacks without applying or selecting d
       calls.push([...args])
       if (args[0] === 'whoami') {
         return JSON.stringify({ user: LOGIN, url: 'https://api.pulumi.com' })
+      }
+      if (args[0] === 'stack' && args[1] === 'output') {
+        return JSON.stringify(
+          Object.fromEntries(
+            FOUNDATION_BOOTSTRAP_OUTPUTS.map((name) => [name, `${name}-value`]),
+          ),
+        )
       }
       return ''
     },
@@ -460,8 +779,6 @@ test('bootstrap default previews all five stacks without applying or selecting d
     calls.filter((args) => args[0] === 'preview').map((args) => args.at(-1)),
     PHASE_ONE_STACKS.map((stack) => stackRef(LOGIN, stack)),
   )
-  assert.equal(calls.some((args) => args[0] === 'up'), false)
-  assert.equal(calls.some((args) => args.join(' ').includes('delivery')), false)
 })
 
 function teardownHarness(stackNames) {
@@ -787,6 +1104,7 @@ function createPlatformHarness() {
     updateInProgress: new Map(),
     afterDeliveryDisableUp: undefined,
     afterFoundationDestroy: undefined,
+    unknownAt: undefined,
     githubStatus:
       'github.com\n  ✓ Logged in to github.com account rohanprabhu\n  - Active account: true\n',
   }
@@ -821,6 +1139,9 @@ function createPlatformHarness() {
 
   async function handlePulumi(args, options = {}, boundary) {
     recordPulumi(args, options, boundary)
+    if (controls.unknownAt === args.join(' ')) {
+      throw new PulumiMutationStateUnknownError()
+    }
     if (args[0] === 'whoami') {
       return {
         stdout: JSON.stringify({ user: LOGIN, url: MANAGED_BACKEND }),
@@ -1663,6 +1984,33 @@ test('full teardown preserves primary and recovery verification failures', async
   )
 
   assert.equal(harness.foundationUpCount, 2)
+})
+
+test('full teardown never retries or recovers after an unknown Pulumi mutation', async () => {
+  const harness = createPlatformHarness()
+  harness.controls.unknownAt =
+    `up --yes --stack ${harness.refs.foundation}`
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    (error) => {
+      assert.equal(error.code, 'PULUMI_MUTATION_STATE_UNKNOWN')
+      return true
+    },
+  )
+
+  const unknownIndex = harness.events.indexOf(
+    `pulumi:${harness.controls.unknownAt}`,
+  )
+  assert.ok(unknownIndex >= 0)
+  assert.deepEqual(
+    harness.events.slice(unknownIndex + 1).filter((event) =>
+      event.startsWith('pulumi:') ||
+      event.startsWith('foundation-config:') ||
+      event.startsWith('google-identity:'),
+    ),
+    [],
+  )
 })
 
 test('full teardown documentation records every destructive and recovery boundary', () => {

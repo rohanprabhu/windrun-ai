@@ -1,10 +1,9 @@
-import { spawnSync } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
+
+import { createPulumiOperations } from '../ops/lib/pulumi.mjs'
 
 const previewStackPattern = /^[^/]+\/windrun-ai\/pr-[1-9][0-9]*$/
-const scriptDirectory = dirname(fileURLToPath(import.meta.url))
-const infraDirectory = resolve(scriptDirectory, '..', '..', 'infra')
+const defaultRunPulumi = createPulumiOperations().runPulumi
 
 export function assertPreviewStackRef(stackRef) {
   if (typeof stackRef !== 'string' || !previewStackPattern.test(stackRef)) {
@@ -14,21 +13,9 @@ export function assertPreviewStackRef(stackRef) {
   }
 }
 
-async function runLocalPulumi(args, { capture = true } = {}) {
-  const result = spawnSync('pulumi', args, {
-    cwd: infraDirectory,
-    encoding: 'utf8',
-    stdio: capture ? 'pipe' : 'inherit',
-  })
-  if (result.error || result.status !== 0) {
-    throw new Error(`pulumi ${args[0]} failed`)
-  }
-  return capture ? (result.stdout ?? '') : ''
-}
-
 export async function destroyPreview(
   stackRef,
-  runPulumi = runLocalPulumi,
+  runPulumi = defaultRunPulumi,
   log = console.log,
 ) {
   assertPreviewStackRef(stackRef)

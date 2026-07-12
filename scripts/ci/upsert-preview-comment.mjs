@@ -1,7 +1,17 @@
 import { pathToFileURL } from 'node:url'
 
+import {
+  boundedHttpRequest,
+  OperationDeadline,
+} from '../lib/bounded-http.mjs'
+
 const marker = '<!-- windrun-preview -->'
-const previewStates = new Set(['ready', 'failed', 'destroyed'])
+const previewStates = new Set([
+  'ready',
+  'failed',
+  'destroyed',
+  'cleanup-failed',
+])
 
 function requiredEnvironment(env, name) {
   const value = env[name]
@@ -19,7 +29,9 @@ export function readPreviewEnvironment(env = process.env) {
 
   const state = requiredEnvironment(env, 'PREVIEW_STATE')
   if (!previewStates.has(state)) {
-    throw new Error('PREVIEW_STATE must be ready, failed, or destroyed')
+    throw new Error(
+      'PREVIEW_STATE must be ready, failed, destroyed, or cleanup-failed',
+    )
   }
 
   return {
@@ -32,16 +44,6 @@ export function readPreviewEnvironment(env = process.env) {
   }
 }
 
-async function request(fetchImpl, url, init) {
-  try {
-    return await fetchImpl(url, init)
-  } catch {
-    throw new Error(
-      `GitHub API ${init.method} failed before receiving a response`,
-    )
-  }
-}
-
 function commentBody(state, previewUrl, runUrl) {
   switch (state) {
     case 'ready':
@@ -50,6 +52,8 @@ function commentBody(state, previewUrl, runUrl) {
       return `${marker}\nWindrun preview deployment failed: ${previewUrl}\n\n[Deployment run](${runUrl})`
     case 'destroyed':
       return `${marker}\nWindrun preview was destroyed.\n\n[Deployment run](${runUrl})`
+    case 'cleanup-failed':
+      return `${marker}\nWindrun preview cleanup failed; it may still be live: ${previewUrl}\n\n[Cleanup run](${runUrl})`
     default:
       throw new Error(`Unsupported preview state: ${state}`)
   }
@@ -78,31 +82,55 @@ function previewMarkerComment(comments) {
   )
 }
 
-async function findPreviewComment(fetchImpl, initialUrl, headers) {
+async function findPreviewComment({
+  fetchImpl,
+  initialUrl,
+  headers,
+  requestTimeoutMs,
+  maxBodyBytes,
+  maxPages,
+  maxTotalBodyBytes,
+  deadline,
+}) {
   const visited = new Set()
   const endpoint = new URL(initialUrl)
   let pageUrl = initialUrl
+  let totalBodyBytes = 0
 
   while (pageUrl) {
+    if (visited.size >= maxPages) {
+      throw new Error(`GitHub API GET pagination exceeded ${maxPages} pages`)
+    }
     if (visited.has(pageUrl)) {
       throw new Error('GitHub API GET pagination repeated a URL')
     }
     visited.add(pageUrl)
 
-    const response = await request(fetchImpl, pageUrl, {
-      method: 'GET',
-      headers,
+    const remainingBodyBytes = maxTotalBodyBytes - totalBodyBytes
+    if (remainingBodyBytes < 1) {
+      throw new Error(
+        `GitHub API GET bodies exceeded ${maxTotalBodyBytes} bytes`,
+      )
+    }
+    const {
+      response,
+      json: comments,
+      bodyBytes,
+    } = await boundedHttpRequest({
+      fetchImpl,
+      url: pageUrl,
+      init: { method: 'GET', headers },
+      label: 'GitHub API GET',
+      requestTimeoutMs,
+      maxBodyBytes: Math.min(maxBodyBytes, remainingBodyBytes),
+      body: 'json',
+      deadline,
     })
+    totalBodyBytes += bodyBytes
     if (!response.ok) {
       throw new Error(`GitHub API GET failed with status ${response.status}`)
     }
 
-    let comments
-    try {
-      comments = await response.json()
-    } catch {
-      throw new Error('GitHub API GET returned invalid JSON')
-    }
     if (!Array.isArray(comments)) {
       throw new Error('GitHub API GET must return a comment array')
     }
@@ -123,8 +151,12 @@ async function findPreviewComment(fetchImpl, initialUrl, headers) {
       )
     }
     if (
+      nextUrl.protocol !== 'https:' ||
       nextUrl.origin !== endpoint.origin ||
-      nextUrl.pathname !== endpoint.pathname
+      nextUrl.pathname !== endpoint.pathname ||
+      nextUrl.username ||
+      nextUrl.password ||
+      nextUrl.hash
     ) {
       throw new Error(
         'GitHub API GET pagination URL left the comments endpoint',
@@ -144,31 +176,69 @@ export async function upsertPreviewComment({
   previewUrl,
   runUrl,
   fetchImpl = fetch,
+  requestTimeoutMs = 15_000,
+  overallTimeoutMs = 120_000,
+  maxBodyBytes = 8 * 1024 * 1024,
+  maxPages = 20,
+  maxTotalBodyBytes = 32 * 1024 * 1024,
 }) {
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1) {
+    throw new Error('maxPages must be a positive integer')
+  }
+  if (
+    !Number.isSafeInteger(maxTotalBodyBytes) ||
+    maxTotalBodyBytes < 1
+  ) {
+    throw new Error('maxTotalBodyBytes must be a positive integer')
+  }
+  const deadline = new OperationDeadline(
+    overallTimeoutMs,
+    'GitHub preview-comment operation',
+  )
   const commentsUrl = `https://api.github.com/repos/${repository}/issues/${pullNumber}/comments`
   const headers = {
     accept: 'application/vnd.github+json',
     authorization: `Bearer ${token}`,
     'x-github-api-version': '2022-11-28',
   }
-  const existingComment = await findPreviewComment(
+  const existingComment = await findPreviewComment({
     fetchImpl,
-    `${commentsUrl}?per_page=100`,
+    initialUrl: `${commentsUrl}?per_page=100`,
     headers,
-  )
+    requestTimeoutMs,
+    maxBodyBytes,
+    maxPages,
+    maxTotalBodyBytes,
+    deadline,
+  })
 
   const body = commentBody(state, previewUrl, runUrl)
   const mutationMethod = existingComment ? 'PATCH' : 'POST'
+  if (
+    existingComment &&
+    (!Number.isSafeInteger(existingComment.id) || existingComment.id < 1)
+  ) {
+    throw new Error('GitHub preview comment id must be a positive integer')
+  }
   const mutationUrl = existingComment
     ? `https://api.github.com/repos/${repository}/issues/comments/${existingComment.id}`
     : commentsUrl
-  const mutationResponse = await request(fetchImpl, mutationUrl, {
-    method: mutationMethod,
-    headers: {
-      ...headers,
-      'content-type': 'application/json',
+  const { response: mutationResponse } = await boundedHttpRequest({
+    fetchImpl,
+    url: mutationUrl,
+    init: {
+      method: mutationMethod,
+      headers: {
+        ...headers,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ body }),
     },
-    body: JSON.stringify({ body }),
+    label: `GitHub API ${mutationMethod}`,
+    requestTimeoutMs,
+    maxBodyBytes,
+    body: 'none',
+    deadline,
   })
 
   if (!mutationResponse.ok) {

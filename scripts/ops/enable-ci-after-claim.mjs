@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createPulumiOperations } from './lib/pulumi.mjs'
+import { hasExactlyOneActiveGitHubLogin } from './lib/github-auth.mjs'
 
 const MANAGED_BACKEND = 'https://api.pulumi.com'
 const EXPECTED_GITHUB_LOGIN = 'rohanprabhu'
@@ -85,31 +86,6 @@ function readPulumiToken(credentials) {
     throw new Error('Pulumi access token is empty')
   }
   return token
-}
-
-function hasActiveGitHubLogin(rawStatus, expectedLogin) {
-  const lines = rawStatus.split(/\r?\n/u)
-  let currentLogin
-  let currentIsActive = false
-
-  for (const line of lines) {
-    const account = line.match(
-      /Logged in to github\.com account ([^\s(]+)/u,
-    )
-    if (account) {
-      if (currentLogin === expectedLogin && currentIsActive) {
-        return true
-      }
-      currentLogin = account[1]
-      currentIsActive = false
-      continue
-    }
-    if (/Active account:\s*true\b/u.test(line)) {
-      currentIsActive = true
-    }
-  }
-
-  return currentLogin === expectedLogin && currentIsActive
 }
 
 function assertFoundationOutputs(outputs) {
@@ -228,7 +204,7 @@ export async function enableCiAfterClaim({
       { cwd: root, env: childEnvironment, capture: true },
     )
     if (
-      !hasActiveGitHubLogin(
+      !hasExactlyOneActiveGitHubLogin(
         `${githubStatus.stdout}\n${githubStatus.stderr}`,
         EXPECTED_GITHUB_LOGIN,
       )
@@ -277,6 +253,8 @@ export async function enableCiAfterClaim({
       ['windrun-ai:stackKind', 'delivery'],
       ['windrun-ai:pulumiOrganization', login],
       ['windrun-ai:enablePulumiGithubOidc', 'true'],
+      ['windrun-ai:productionCiEnabled', 'true'],
+      ['windrun-ai:stagingCiEnabled', 'true'],
     ]) {
       await runStep(
         executeCommand,

@@ -24,13 +24,15 @@ jobs:
       inputs.base-sha == github.event.pull_request.base.sha &&
       inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: preview
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: write
     concurrency:
-      group: windrun-preview-${{ inputs.pr-number }}
+      group: windrun-preview-mutation-${{ inputs.pr-number }}
       cancel-in-progress: false
     steps:
       - name: Check out trusted platform
@@ -42,6 +44,10 @@ jobs:
       - uses: ./platform/.github/actions/setup
         with:
           working-directory: platform
+      - id: live-gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node platform/scripts/ci/assert-deployment-current.mjs preview-closed "${{ inputs.pr-number }}" staging
       - uses: ./platform/.github/actions/auth-cloud
         with:
           pulumi-organization: ${{ vars.PULUMI_ORGANIZATION }}
@@ -55,11 +61,12 @@ jobs:
       - id: destroy
         run: node platform/scripts/ci/destroy-preview.mjs "${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/pr-${{ inputs.pr-number }}"
       - name: Update preview comment
+        if: always()
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr-number }}
-          PREVIEW_STATE: destroyed
+          PREVIEW_STATE: ${{ steps.destroy.outcome == 'success' && 'destroyed' || 'cleanup-failed' }}
           PREVIEW_URL: ${{ inputs.preview-url }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node platform/scripts/ci/upsert-preview-comment.mjs

@@ -4,9 +4,13 @@ on:
     branches: [staging]
 permissions:
   contents: read
+concurrency:
+  group: windrun-staging
+  cancel-in-progress: false
 jobs:
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -16,20 +20,25 @@ jobs:
       - run: pnpm ci:quality
   deploy:
     needs: quality
-    if: vars.PULUMI_CI_ENABLED == 'true'
+    if: >-
+      vars.PULUMI_CI_ENABLED == 'true' &&
+      vars.PULUMI_STAGING_ENABLED == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     environment: staging
     permissions:
       contents: read
+      actions: read
       id-token: write
-    concurrency:
-      group: windrun-staging
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - id: freshness
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/assert-deployment-current.mjs branch staging "${{ github.sha }}" staging
       - uses: ./.github/actions/auth-cloud
         with:
           pulumi-organization: ${{ vars.PULUMI_ORGANIZATION }}
@@ -57,4 +66,7 @@ jobs:
               value: staging
             windrun-ai:gitCommitSha:
               value: ${{ github.sha }}
+      - run: |
+          set -o pipefail
+          pnpm --dir infra exec pulumi stack export --stack "${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/staging" | node scripts/ci/validate-app-checkpoint.mjs
       - run: node scripts/ci/smoke-test.mjs https://staging.app.windrun.ai/api/health --attempts 30 --delay-ms 10000

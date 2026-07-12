@@ -498,6 +498,7 @@ describe("Pulumi stack dispatcher", () => {
           "pulumi:pulumi:Stack",
           "pulumi:pulumi:StackReference",
           "pulumi:providers:gcp",
+          "pulumi:providers:docker-build",
           "docker-build:index:Image",
           "gcp:cloudrunv2/service:Service",
         ].sort(),

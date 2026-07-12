@@ -15,6 +15,8 @@ const checkoutAction =
   'actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5'
 const pulumiAction =
   'pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d'
+const setupGcloudAction =
+  'google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db'
 
 const fixtures = [
   {
@@ -114,17 +116,22 @@ for (const fixture of fixtures) {
     const deploy = readWorkflow(fixture.file).jobs.deploy
 
     assert.equal(deploy.needs, 'quality')
-    assert.equal(deploy.if, "vars.PULUMI_CI_ENABLED == 'true'")
+    assertIncludesEvery(deploy.if, [
+      "vars.PULUMI_CI_ENABLED == 'true'",
+      `vars.PULUMI_${fixture.name.toUpperCase()}_ENABLED == 'true'`,
+    ])
     assert.equal(deploy['runs-on'], 'ubuntu-latest')
     assert.equal(deploy.environment, fixture.environment)
     assert.deepEqual(deploy.permissions, {
       contents: 'read',
+      actions: 'read',
       'id-token': 'write',
     })
-    assert.deepEqual(deploy.concurrency, {
+    assert.deepEqual(readWorkflow(fixture.file).concurrency, {
       group: fixture.concurrencyGroup,
       'cancel-in-progress': false,
     })
+    assert.equal(deploy.concurrency, undefined)
 
     const auth = deploy.steps.find(
       (step) => step.uses === './.github/actions/auth-cloud',
@@ -254,6 +261,7 @@ test('pull request caller is uncredentialed and delegates only same-repository e
     assert.equal(job.secrets, undefined)
     assert.deepEqual(job.permissions, {
       contents: 'read',
+      actions: 'read',
       'id-token': 'write',
       'pull-requests': 'write',
     })
@@ -296,11 +304,12 @@ function assertPreviewJobBoundary(job) {
   assert.equal(job.environment, 'preview')
   assert.deepEqual(job.permissions, {
     contents: 'read',
+    actions: 'read',
     'id-token': 'write',
     'pull-requests': 'write',
   })
   assert.deepEqual(job.concurrency, {
-    group: 'windrun-preview-${{ inputs.pr-number }}',
+    group: 'windrun-preview-mutation-${{ inputs.pr-number }}',
     'cancel-in-progress': false,
   })
   assert.equal(job.secrets, undefined)
@@ -370,8 +379,10 @@ test('preview deploy revalidates immutable event data before trusted steps', () 
   )
   assert.deepEqual(setup?.with, { 'working-directory': 'platform' })
   const pulumiSteps = job.steps.filter((step) => step.uses === pulumiAction)
-  assert.equal(pulumiSteps.length, 2)
-  for (const step of pulumiSteps) {
+  assert.equal(pulumiSteps.length, 3)
+  assert.equal(pulumiSteps[0].with.command, undefined)
+  const mutationSteps = pulumiSteps.filter((step) => step.with.command)
+  for (const step of mutationSteps) {
     assert.equal(
       step.with['stack-name'],
       '${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/pr-${{ inputs.pr-number }}',
@@ -388,9 +399,9 @@ test('preview deploy revalidates immutable event data before trusted steps', () 
       '${{ github.workspace }}/source',
     )
   }
-  assert.equal(pulumiSteps[0].with.command, 'preview')
-  assert.equal(pulumiSteps[1].id, 'up')
-  assert.equal(pulumiSteps[1].with.command, 'up')
+  assert.equal(mutationSteps[0].with.command, 'preview')
+  assert.equal(mutationSteps[1].id, 'up')
+  assert.equal(mutationSteps[1].with.command, 'up')
 
   const smoke = job.steps.find((step) => step.id === 'smoke')
   assert.equal(
@@ -461,7 +472,10 @@ test('preview destroy shares the queue and runs only trusted main code', () => {
   )
   const comment = job.steps.at(-1)
   assert.equal(comment.run, 'node platform/scripts/ci/upsert-preview-comment.mjs')
-  assert.equal(comment.env.PREVIEW_STATE, 'destroyed')
+  assert.equal(
+    comment.env.PREVIEW_STATE,
+    "${{ steps.destroy.outcome == 'success' && 'destroyed' || 'cleanup-failed' }}",
+  )
   assert.equal(comment.env.GITHUB_TOKEN, '${{ github.token }}')
 })
 
@@ -483,9 +497,35 @@ test('setup action supports a trusted checkout subdirectory', () => {
   assert.equal(install?.['working-directory'], '${{ inputs.working-directory }}')
 })
 
+test('cloud auth prepares an isolated gcloud credential-helper config without tokens', () => {
+  const path = resolve(
+    repositoryRoot,
+    '.github',
+    'actions',
+    'auth-cloud',
+    'action.yml',
+  )
+  const source = readFileSync(path, 'utf8')
+  const action = parse(source)
+  const setupIndex = action.runs.steps.findIndex(
+    (step) => step.uses === setupGcloudAction,
+  )
+  const configIndex = action.runs.steps.findIndex(
+    (step) => step.id === 'docker-auth',
+  )
+
+  assert.ok(setupIndex >= 0)
+  assert.ok(configIndex > setupIndex)
+  assert.match(action.runs.steps[configIndex].run, /credHelpers/u)
+  assert.match(action.runs.steps[configIndex].run, /asia-south1-docker\.pkg\.dev/u)
+  assert.match(action.runs.steps[configIndex].run, /DOCKER_CONFIG/u)
+  assert.doesNotMatch(action.runs.steps[configIndex].run, /access.?token|password/iu)
+})
+
 function assertPrivilegedOperationSteps(job, expected) {
   assert.deepEqual(job.permissions, {
     contents: 'read',
+    actions: 'read',
     'id-token': 'write',
   })
   assertImmutableExternalActions({ jobs: { privileged: job } })
@@ -620,4 +660,121 @@ test('foundation workflow is main-only, reviewed, and has no destroy path', () =
       'windrun-ai:stackKind': { value: 'foundation' },
     },
   })
+})
+
+test('fixed deployments serialize quality and reject stale branch tips before auth', () => {
+  for (const fixture of fixtures) {
+    const workflow = readWorkflow(fixture.file)
+    assert.deepEqual(workflow.concurrency, {
+      group: fixture.concurrencyGroup,
+      'cancel-in-progress': false,
+    })
+    assert.equal(workflow.jobs.quality['timeout-minutes'], 30)
+    const deploy = workflow.jobs.deploy
+    assert.equal(deploy.concurrency, undefined)
+    assert.equal(deploy['timeout-minutes'], 90)
+    assert.equal(deploy.permissions.actions, 'read')
+    assertIncludesEvery(deploy.if, [
+      "vars.PULUMI_CI_ENABLED == 'true'",
+      `vars.PULUMI_${fixture.name.toUpperCase()}_ENABLED == 'true'`,
+    ])
+    const freshnessIndex = deploy.steps.findIndex(
+      (step) => step.id === 'freshness',
+    )
+    const authIndex = deploy.steps.findIndex(
+      (step) => step.uses === './.github/actions/auth-cloud',
+    )
+    assert.ok(freshnessIndex >= 0)
+    assert.ok(freshnessIndex < authIndex)
+    assert.equal(
+      deploy.steps[freshnessIndex].run,
+      `node scripts/ci/assert-deployment-current.mjs branch ${fixture.branch} \"\${{ github.sha }}\" ${fixture.name}`,
+    )
+    assert.equal(
+      deploy.steps[freshnessIndex].env.GITHUB_TOKEN,
+      '${{ github.token }}',
+    )
+  }
+})
+
+test('pull-request lifecycle serializes quality with close and rechecks live PR state', () => {
+  const caller = readWorkflow(pullRequestCaller)
+  assert.deepEqual(caller.concurrency, {
+    group: 'windrun-preview-event-${{ github.event.pull_request.number }}',
+    'cancel-in-progress': false,
+  })
+  assert.equal(caller.jobs.quality['timeout-minutes'], 30)
+
+  const deploy = readWorkflow(previewDeployWorkflow).jobs.deploy
+  const destroy = readWorkflow(previewDestroyWorkflow).jobs.destroy
+  assert.equal(deploy['timeout-minutes'], 90)
+  assert.equal(destroy['timeout-minutes'], 30)
+  assert.equal(deploy.permissions.actions, 'read')
+  assert.equal(destroy.permissions.actions, 'read')
+  for (const job of [deploy, destroy]) {
+    assert.equal(
+      job.concurrency.group,
+      'windrun-preview-mutation-${{ inputs.pr-number }}',
+    )
+  }
+
+  const freshnessIndex = deploy.steps.findIndex(
+    (step) => step.id === 'freshness',
+  )
+  const deployAuthIndex = deploy.steps.findIndex(
+    (step) => step.uses === './platform/.github/actions/auth-cloud',
+  )
+  assert.ok(freshnessIndex >= 0)
+  assert.ok(freshnessIndex < deployAuthIndex)
+  assert.equal(
+    deploy.steps[freshnessIndex].run,
+    'node platform/scripts/ci/assert-deployment-current.mjs preview "${{ inputs.pr-number }}" "${{ inputs.merge-sha }}" staging',
+  )
+
+  const configure = deploy.steps.find(
+    (step) => step.id === 'configure-preview-stack',
+  )
+  assert.ok(configure)
+  assert.match(configure.run, /stack select --create/u)
+  assert.match(configure.run, /pulumi:disable-default-providers\[0\].*gcp/u)
+  assert.match(
+    configure.run,
+    /pulumi:disable-default-providers\[1\].*docker-build/u,
+  )
+
+  const destroyGateIndex = destroy.steps.findIndex(
+    (step) => step.id === 'live-gate',
+  )
+  const destroyAuthIndex = destroy.steps.findIndex(
+    (step) => step.uses === './platform/.github/actions/auth-cloud',
+  )
+  assert.ok(destroyGateIndex >= 0)
+  assert.ok(destroyGateIndex < destroyAuthIndex)
+
+  const comment = destroy.steps.at(-1)
+  assert.equal(comment.if, 'always()')
+  assert.match(comment.env.PREVIEW_STATE, /steps\.destroy\.outcome/u)
+  assert.match(comment.env.PREVIEW_STATE, /cleanup-failed/u)
+})
+
+test('every workflow job has an explicit execution deadline', () => {
+  for (const file of [
+    ...fixtures.map(({ file }) => file),
+    pullRequestCaller,
+    previewDeployWorkflow,
+    previewDestroyWorkflow,
+    'manage-edge.yml',
+    'manage-foundation.yml',
+  ]) {
+    const workflow = readWorkflow(file)
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      if (typeof job.uses === 'string') continue
+      assert.equal(
+        Number.isSafeInteger(job['timeout-minutes']) &&
+          job['timeout-minutes'] > 0,
+        true,
+        `${file}:${name} must declare timeout-minutes`,
+      )
+    }
+  }
 })

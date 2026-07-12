@@ -262,6 +262,30 @@ test('refuses when rohanprabhu is present but another account is active', async 
   assertNoDeliveryMutation(harness.calls)
 })
 
+test('refuses when active rohanprabhu is followed by another active account', async () => {
+  const harness = createHarness({
+    githubStatus: `github.com
+  ✓ Logged in to github.com account rohanprabhu (keyring)
+  - Active account: true
+  ✓ Logged in to github.com account another-user (keyring)
+  - Active account: true
+`,
+  })
+
+  await assert.rejects(
+    harness.execute(),
+    /active GitHub login must be exactly rohanprabhu/,
+  )
+  assert.deepEqual(
+    harness.calls.map(({ command, args }) => commandText(command, args)),
+    [
+      'pulumi whoami --json',
+      'gh auth status --hostname github.com',
+    ],
+  )
+  assertNoDeliveryMutation(harness.calls)
+})
+
 test('refuses an empty local GitHub token', async () => {
   const harness = createHarness({ githubToken: '  ' })
 
@@ -312,6 +336,8 @@ test('runs the exact fail-closed delivery enablement order', async () => {
       `pulumi config set windrun-ai:stackKind delivery --stack ${DELIVERY_STACK}`,
       `pulumi config set windrun-ai:pulumiOrganization ${LOGIN} --stack ${DELIVERY_STACK}`,
       `pulumi config set windrun-ai:enablePulumiGithubOidc true --stack ${DELIVERY_STACK}`,
+      `pulumi config set windrun-ai:productionCiEnabled true --stack ${DELIVERY_STACK}`,
+      `pulumi config set windrun-ai:stagingCiEnabled true --stack ${DELIVERY_STACK}`,
       'pnpm ci:validate-contract',
       'pnpm ci:quality',
       `pulumi preview --stack ${DELIVERY_STACK}`,
@@ -324,6 +350,8 @@ test('runs the exact fail-closed delivery enablement order', async () => {
       INFRA_ROOT,
       REPOSITORY_ROOT,
       REPOSITORY_ROOT,
+      INFRA_ROOT,
+      INFRA_ROOT,
       INFRA_ROOT,
       INFRA_ROOT,
       INFRA_ROOT,

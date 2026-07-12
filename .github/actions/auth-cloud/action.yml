@@ -25,3 +25,13 @@ runs:
         service_account: ${{ inputs.service-account }}
         create_credentials_file: true
         export_environment_variables: true
+    - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+    - id: docker-auth
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker_config="${RUNNER_TEMP}/windrun-docker-${GITHUB_RUN_ID}-${GITHUB_JOB}-${GITHUB_RUN_ATTEMPT}"
+        umask 077
+        mkdir -p "${docker_config}"
+        printf '%s\n' '{"credHelpers":{"asia-south1-docker.pkg.dev":"gcloud"}}' > "${docker_config}/config.json"
+        printf 'DOCKER_CONFIG=%s\n' "${docker_config}" >> "${GITHUB_ENV}"

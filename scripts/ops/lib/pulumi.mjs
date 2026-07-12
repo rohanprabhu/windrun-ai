@@ -1,16 +1,43 @@
-import { spawnSync } from 'node:child_process'
-import { basename, dirname, resolve } from 'node:path'
+import { spawn } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { boundedHttpRequest } from '../../lib/bounded-http.mjs'
 
 const EXPECTED_GOOGLE_IDENTITY = 'rohan@windrun.ai'
 const GOOGLE_USERINFO_URL =
   'https://openidconnect.googleapis.com/v1/userinfo'
+const FORBIDDEN_GCP_ENVIRONMENT = Object.freeze([
+  'GOOGLE_CREDENTIALS',
+  'GOOGLE_CLOUD_KEYFILE_JSON',
+  'GCLOUD_KEYFILE_JSON',
+  'GOOGLE_OAUTH_ACCESS_TOKEN',
+  'GOOGLE_IMPERSONATE_SERVICE_ACCOUNT',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE',
+  'CLOUDSDK_AUTH_ACCESS_TOKEN',
+  'CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT',
+  'PULUMI_CONFIG',
+])
+const FORBIDDEN_GCP_CONFIG = new Set([
+  'gcp:credentials',
+  'gcp:accessToken',
+  'gcp:impersonateServiceAccount',
+  'gcp:impersonateServiceAccountDelegates',
+])
 const ALLOWED_PNPM_SCRIPTS = new Set([
   'ci:validate-contract',
   'ci:quality',
 ])
 const libraryDirectory = dirname(fileURLToPath(import.meta.url))
 const defaultRepositoryRoot = resolve(libraryDirectory, '..', '..', '..')
+const DOCKER_CREDENTIAL_HELPER_CONFIG = `${JSON.stringify({
+  credHelpers: {
+    'asia-south1-docker.pkg.dev': 'gcloud',
+  },
+})}\n`
 
 function isExactArgs(args, expected) {
   return (
@@ -19,21 +46,147 @@ function isExactArgs(args, expected) {
   )
 }
 
-async function spawnProcess(executable, args, options = {}) {
+export class CommandTimeoutError extends Error {
+  constructor() {
+    super('child command timed out')
+    this.name = 'CommandTimeoutError'
+    this.code = 'COMMAND_TIMEOUT'
+  }
+}
+
+export class PulumiMutationStateUnknownError extends Error {
+  constructor() {
+    super('Pulumi mutation state is unknown after forced child termination')
+    this.name = 'PulumiMutationStateUnknownError'
+    this.code = 'PULUMI_MUTATION_STATE_UNKNOWN'
+  }
+}
+
+class CommandOutputLimitError extends Error {
+  constructor() {
+    super('child command exceeded its output limit')
+    this.name = 'CommandOutputLimitError'
+    this.code = 'COMMAND_OUTPUT_LIMIT'
+  }
+}
+
+function boundaryError(reason, mutationMayHaveStarted) {
+  if (mutationMayHaveStarted) {
+    return new PulumiMutationStateUnknownError()
+  }
+  return reason === 'timeout'
+    ? new CommandTimeoutError()
+    : new CommandOutputLimitError()
+}
+
+function signalChildGroup(child, signal) {
+  if (!child.pid) return
+  try {
+    if (process.platform === 'win32') {
+      child.kill(signal)
+    } else {
+      process.kill(-child.pid, signal)
+    }
+  } catch {
+    try {
+      child.kill(signal)
+    } catch {
+      // The child exited between the state check and signal delivery.
+    }
+  }
+}
+
+export async function runManagedProcess(executable, args, options = {}) {
   const capture = options.capture !== false
-  const result = spawnSync(executable, args, {
-    cwd: options.cwd,
-    env: options.env,
-    encoding: 'utf8',
-    stdio: capture ? 'pipe' : 'inherit',
+  const timeoutMs = options.timeoutMs ?? 60 * 60 * 1000
+  const killGraceMs = options.killGraceMs ?? 5_000
+  const maxOutputBytes = options.maxOutputBytes ?? 16 * 1024 * 1024
+  for (const [value, label] of [
+    [timeoutMs, 'timeoutMs'],
+    [killGraceMs, 'killGraceMs'],
+    [maxOutputBytes, 'maxOutputBytes'],
+  ]) {
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new Error(`${label} must be a positive safe integer`)
+    }
+  }
+
+  return new Promise((resolveProcess, rejectProcess) => {
+    const child = spawn(executable, args, {
+      cwd: options.cwd,
+      env: options.env,
+      detached: process.platform !== 'win32',
+      stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+      windowsHide: true,
+    })
+    const stdout = []
+    const stderr = []
+    let outputBytes = 0
+    let terminationReason
+    let killTimer
+    let settled = false
+
+    function cleanup() {
+      clearTimeout(timeoutTimer)
+      if (killTimer !== undefined) clearTimeout(killTimer)
+    }
+
+    function terminate(reason) {
+      if (terminationReason) return
+      terminationReason = reason
+      signalChildGroup(child, 'SIGTERM')
+      killTimer = setTimeout(() => {
+        signalChildGroup(child, 'SIGKILL')
+      }, killGraceMs)
+    }
+
+    function collect(target, chunk) {
+      if (terminationReason) return
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      outputBytes += bytes.byteLength
+      if (outputBytes > maxOutputBytes) {
+        terminate('output')
+        return
+      }
+      target.push(bytes)
+    }
+
+    if (capture) {
+      child.stdout.on('data', (chunk) => collect(stdout, chunk))
+      child.stderr.on('data', (chunk) => collect(stderr, chunk))
+    }
+
+    const timeoutTimer = setTimeout(() => terminate('timeout'), timeoutMs)
+
+    child.once('error', () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      rejectProcess(new Error('child command failed'))
+    })
+    child.once('close', (status, signal) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (terminationReason) {
+        rejectProcess(
+          boundaryError(
+            terminationReason,
+            options.mutationMayHaveStarted === true,
+          ),
+        )
+        return
+      }
+      if (status !== 0 || signal) {
+        rejectProcess(new Error('child command failed'))
+        return
+      }
+      resolveProcess({
+        stdout: capture ? Buffer.concat(stdout).toString('utf8') : '',
+        stderr: capture ? Buffer.concat(stderr).toString('utf8') : '',
+      })
+    })
   })
-  if (result.error || result.status !== 0) {
-    throw new Error('child command failed')
-  }
-  return {
-    stdout: capture ? (result.stdout ?? '') : '',
-    stderr: capture ? (result.stderr ?? '') : '',
-  }
 }
 
 function normalizeResult(result) {
@@ -72,23 +225,52 @@ export function stackRef(organization, stack) {
 }
 
 export function createPulumiOperations({
-  processRunner = spawnProcess,
+  processRunner = runManagedProcess,
   fetchImpl = globalThis.fetch,
   environment = process.env,
   repositoryRoot = defaultRepositoryRoot,
+  requestTimeoutMs = 10_000,
+  maxUserinfoBytes = 64 * 1024,
+  commandTimeoutMs = 60 * 60 * 1000,
+  killGraceMs = 5_000,
+  maxOutputBytes = 16 * 1024 * 1024,
 } = {}) {
   const root = resolve(repositoryRoot)
   const infraRoot = resolve(root, 'infra')
-  const usesInjectedRunner = processRunner !== spawnProcess
+  const usesInjectedRunner = processRunner !== runManagedProcess
 
   async function runChecked(executable, args, options, label) {
     try {
       return normalizeResult(
-        await processRunner(executable, args, options),
+        await processRunner(executable, args, {
+          ...options,
+          timeoutMs: options.timeoutMs ?? commandTimeoutMs,
+          killGraceMs,
+          maxOutputBytes,
+          mutationMayHaveStarted:
+            options.mutationMayHaveStarted === true,
+        }),
       )
-    } catch {
+    } catch (error) {
+      if (
+        error?.code === 'COMMAND_TIMEOUT' ||
+        error?.code === 'COMMAND_OUTPUT_LIMIT' ||
+        error?.code === 'PULUMI_MUTATION_STATE_UNKNOWN'
+      ) {
+        throw error
+      }
       throw new Error(`${label} failed`)
     }
+  }
+
+  function pulumiMutationMayHaveStarted(args) {
+    if (args[0] === 'preview' || args[0] === 'version') return false
+    if (isExactArgs(args, ['whoami', '--json'])) return false
+    if (args[0] === 'stack' && ['ls', 'export', 'output'].includes(args[1])) {
+      return false
+    }
+    if (args[0] === 'config' && args[1] === '--json') return false
+    return true
   }
 
   function pulumiExecutable(childEnvironment = environment) {
@@ -102,16 +284,37 @@ export function createPulumiOperations({
   async function runPulumiResult(args, options = {}) {
     validateArgs(args)
     const childEnvironment = options.env || environment
-    return runChecked(
-      pulumiExecutable(childEnvironment),
-      args,
-      {
-        cwd: infraRoot,
-        env: childEnvironment,
-        capture: options.capture !== false,
-      },
-      `pulumi ${args[0]}`,
+    const dockerConfigDirectory = await mkdtemp(
+      join(tmpdir(), 'windrun-docker-config-'),
     )
+    const isolatedEnvironment = {
+      ...childEnvironment,
+      DOCKER_CONFIG: dockerConfigDirectory,
+    }
+    try {
+      await writeFile(
+        join(dockerConfigDirectory, 'config.json'),
+        DOCKER_CREDENTIAL_HELPER_CONFIG,
+        { encoding: 'utf8', mode: 0o600 },
+      )
+      return await runChecked(
+        pulumiExecutable(isolatedEnvironment),
+        args,
+        {
+          cwd: infraRoot,
+          env: isolatedEnvironment,
+          capture: options.capture !== false,
+          mutationMayHaveStarted: pulumiMutationMayHaveStarted(args),
+        },
+        `pulumi ${args[0]}`,
+      )
+    } finally {
+      delete isolatedEnvironment.DOCKER_CONFIG
+      delete isolatedEnvironment.GH_TOKEN
+      delete isolatedEnvironment.GITHUB_TOKEN
+      delete isolatedEnvironment.PULUMI_ACCESS_TOKEN
+      await rm(dockerConfigDirectory, { recursive: true, force: true })
+    }
   }
 
   async function runPulumi(args, options = {}) {
@@ -196,10 +399,38 @@ export function createPulumiOperations({
     )
   }
 
-  async function assertExactGoogleIdentity() {
+  async function assertExactGoogleIdentity({ stackRefs = [] } = {}) {
     let adcToken
     let requestHeaders
     try {
+      for (const name of FORBIDDEN_GCP_ENVIRONMENT) {
+        if (environment[name] !== undefined && environment[name] !== '') {
+          throw new Error(`${name} is not permitted for local Pulumi operations`)
+        }
+      }
+      if (!Array.isArray(stackRefs)) {
+        throw new Error('stackRefs must be an array')
+      }
+      for (const stack of stackRefs) {
+        const configResult = await runPulumiResult(
+          ['config', '--json', '--stack', stack],
+          { capture: true },
+        )
+        let config
+        try {
+          config = JSON.parse(configResult.stdout)
+        } catch {
+          throw new Error('Pulumi stack config must be valid JSON')
+        }
+        if (config === null || typeof config !== 'object' || Array.isArray(config)) {
+          throw new Error('Pulumi stack config must be a JSON object')
+        }
+        for (const key of Object.keys(config)) {
+          if (FORBIDDEN_GCP_CONFIG.has(key)) {
+            throw new Error(`${key} is not permitted for local Pulumi operations`)
+          }
+        }
+      }
       const active = await runChecked(
         'gcloud',
         [
@@ -229,21 +460,21 @@ export function createPulumiOperations({
       }
       requestHeaders = { Authorization: `Bearer ${adcToken}` }
 
-      let response
-      try {
-        response = await fetchImpl(GOOGLE_USERINFO_URL, {
-          headers: requestHeaders,
-        })
-      } catch {
-        throw new Error('ADC identity lookup failed')
-      }
-      if (!response?.ok) {
-        throw new Error('ADC identity lookup failed')
-      }
-
       let profile
       try {
-        profile = await response.json()
+        const result = await boundedHttpRequest({
+          fetchImpl,
+          url: GOOGLE_USERINFO_URL,
+          init: { headers: requestHeaders },
+          label: 'Google ADC userinfo',
+          requestTimeoutMs,
+          maxBodyBytes: maxUserinfoBytes,
+          body: 'json',
+        })
+        if (!result.response.ok) {
+          throw new Error('userinfo response was not successful')
+        }
+        profile = result.json
       } catch {
         throw new Error('ADC identity lookup failed')
       }

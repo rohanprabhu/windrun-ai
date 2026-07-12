@@ -20,6 +20,8 @@ const allowedProjectConfigKeys = new Set([
   "windrun-ai:pullRequestNumber",
   "windrun-ai:allowProjectDeletion",
   "windrun-ai:enablePulumiGithubOidc",
+  "windrun-ai:productionCiEnabled",
+  "windrun-ai:stagingCiEnabled",
   "windrun-ai:pulumiOrganization",
   "windrun-ai:digitalOceanToken",
 ]);
@@ -47,6 +49,15 @@ describe("static Pulumi stack configuration", () => {
 
       expect(config["pulumi:disable-default-providers"]).toContain("gcp");
       expect(config["windrun-ai:stackKind"]).toBe(stack);
+    },
+  );
+
+  it.each(["production", "staging"] as const)(
+    "disables the default docker-build provider for %s",
+    (stack) => {
+      expect(readStackConfig(stack)["pulumi:disable-default-providers"]).toContain(
+        "docker-build",
+      );
     },
   );
 

@@ -79,30 +79,23 @@ export function createAppStack(args: AppStackArgs): AppStackOutputs {
     : "../windrun-ai/Dockerfile";
   const host = canonicalHost(args);
   const tag = pulumi.interpolate`${registryHost}/${args.projectId}/${args.repositoryId}/${args.serviceName}:${args.gitCommitSha}`;
-  const clientConfig = gcp.organizations.getClientConfigOutput({
-    provider: args.provider,
-  });
+  const dockerProvider = new dockerBuild.Provider(
+    `${args.serviceName}-docker-build`,
+    { host: "" },
+  );
 
   const image = new dockerBuild.Image(
     `${args.serviceName}-image`,
     {
       buildOnPreview: false,
+      exec: false,
       context: { location: contextRoot },
       dockerfile: { location: dockerfile },
       platforms: [dockerBuild.Platform.Linux_amd64],
       push: true,
       tags: [tag],
-      registries: pulumi.secret(
-        clientConfig.accessToken.apply((accessToken) => [
-          {
-            address: registryHost,
-            username: "oauth2accesstoken",
-            password: accessToken,
-          },
-        ]),
-      ),
     },
-    { retainOnDelete: true },
+    { provider: dockerProvider, retainOnDelete: true },
   );
 
   const service = new gcp.cloudrunv2.Service(

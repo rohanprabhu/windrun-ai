@@ -25,6 +25,8 @@ function readStackContext(config: pulumi.Config): StackContext {
     allowProjectDeletion: config.getBoolean("allowProjectDeletion"),
     enablePulumiGithubOidc:
       config.getBoolean("enablePulumiGithubOidc"),
+    productionCiEnabled: config.getBoolean("productionCiEnabled"),
+    stagingCiEnabled: config.getBoolean("stagingCiEnabled"),
     pulumiOrganization: config.get("pulumiOrganization"),
   };
 
@@ -54,6 +56,19 @@ function run() {
       const enablePulumiGithubOidc =
         config.getBoolean("enablePulumiGithubOidc") ?? false;
       const pulumiOrganization = config.require("pulumiOrganization");
+      const productionCiEnabled =
+        config.getBoolean("productionCiEnabled") ??
+        enablePulumiGithubOidc;
+      const stagingCiEnabled =
+        config.getBoolean("stagingCiEnabled") ?? enablePulumiGithubOidc;
+      if (
+        !enablePulumiGithubOidc &&
+        (productionCiEnabled || stagingCiEnabled)
+      ) {
+        throw new Error(
+          "scope CI gates cannot be enabled while Pulumi GitHub OIDC is disabled",
+        );
+      }
 
       assertDeliveryCredentials(enablePulumiGithubOidc);
 
@@ -61,6 +76,8 @@ function run() {
       return createDeliveryStack({
         pulumiOrganization,
         enablePulumiGithubOidc,
+        productionCiEnabled,
+        stagingCiEnabled,
         foundation,
       });
     }

@@ -43,7 +43,13 @@ function personalPolicy(args: {
   };
 }
 
-export function githubOidcPolicies(pulumiOrganization: string) {
+export function githubOidcPolicies(
+  pulumiOrganization: string,
+  scopes: {
+    productionCiEnabled: boolean;
+    stagingCiEnabled: boolean;
+  } = { productionCiEnabled: true, stagingCiEnabled: true },
+) {
   const directPolicies: Array<{
     environment: Exclude<DeliveryEnvironment, "preview">;
     eventName: "push" | "workflow_dispatch";
@@ -81,7 +87,22 @@ export function githubOidcPolicies(pulumiOrganization: string) {
       workflow: "manage-edge.yml",
     },
   ];
-  const policies = directPolicies.map((policy) =>
+  const scopeEnabled = (environment: DeliveryEnvironment) => {
+    if (environment === "production" || environment === "production-edge") {
+      return scopes.productionCiEnabled;
+    }
+    if (
+      environment === "staging" ||
+      environment === "staging-edge" ||
+      environment === "preview"
+    ) {
+      return scopes.stagingCiEnabled;
+    }
+    return true;
+  };
+  const policies = directPolicies
+    .filter((policy) => scopeEnabled(policy.environment))
+    .map((policy) =>
     personalPolicy({
       pulumiOrganization,
       environment: policy.environment,
@@ -97,7 +118,7 @@ export function githubOidcPolicies(pulumiOrganization: string) {
     event_name: "pull_request",
     base_ref: "main",
   };
-  policies.push(
+  const previewPolicies = [
     personalPolicy({
       pulumiOrganization,
       environment: "preview",
@@ -134,7 +155,8 @@ export function githubOidcPolicies(pulumiOrganization: string) {
           `${workflowPrefix}_preview-destroy.yml@refs/heads/main`,
       },
     }),
-  );
+  ];
+  if (scopes.stagingCiEnabled) policies.push(...previewPolicies);
 
   const coveredEnvironments = new Set<DeliveryEnvironment>(
     directPolicies.map((policy) => policy.environment),
@@ -148,12 +170,17 @@ export function githubOidcPolicies(pulumiOrganization: string) {
 
 export function createPulumiGithubOidc(args: {
   pulumiOrganization: string;
+  productionCiEnabled: boolean;
+  stagingCiEnabled: boolean;
   dependsOn: pulumi.Resource[];
 }) {
   const provider = new pulumiService.Provider("pulumi-service-windrun", {
     apiUrl: "https://api.pulumi.com",
   });
-  const policies = githubOidcPolicies(args.pulumiOrganization);
+  const policies = githubOidcPolicies(args.pulumiOrganization, {
+    productionCiEnabled: args.productionCiEnabled,
+    stagingCiEnabled: args.stagingCiEnabled,
+  });
   if (policies.length === 0) {
     throw new Error("Pulumi GitHub OIDC requires at least one auth policy");
   }

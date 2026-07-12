@@ -10,6 +10,8 @@ import { createPulumiGithubOidc } from "./pulumi-oidc";
 export interface DeliveryStackArgs {
   pulumiOrganization: string;
   enablePulumiGithubOidc: boolean;
+  productionCiEnabled: boolean;
+  stagingCiEnabled: boolean;
   foundation: FoundationOutputs;
 }
 
@@ -60,6 +62,8 @@ function createDeliveryResources(
   const github = createGitHubDeliveryResources({
     pulumiOrganization: args.pulumiOrganization,
     foundation: args.foundation,
+    productionCiEnabled: args.productionCiEnabled,
+    stagingCiEnabled: args.stagingCiEnabled,
   });
   const oidcPrerequisites: pulumi.Resource[] = [
     ...github.environments,
@@ -68,6 +72,8 @@ function createDeliveryResources(
   const pulumiOidc = args.enablePulumiGithubOidc
     ? createPulumiGithubOidc({
         pulumiOrganization: args.pulumiOrganization,
+        productionCiEnabled: args.productionCiEnabled,
+        stagingCiEnabled: args.stagingCiEnabled,
         dependsOn: oidcPrerequisites,
       })
     : undefined;

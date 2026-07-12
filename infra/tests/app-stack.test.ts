@@ -1,5 +1,4 @@
 import * as gcp from "@pulumi/gcp";
-import { isRpcSecret, unwrapRpcSecret } from "@pulumi/pulumi/runtime/rpc";
 import { describe, expect, it } from "vitest";
 
 import { PROJECT_IDS, REGION } from "../src/constants";
@@ -88,6 +87,7 @@ describe("Cloud Run application stacks", () => {
       `${REGION}-docker.pkg.dev/${fixture.projectId}/windrun/production:${commitSha}`;
     expect(image.inputs).toMatchObject({
       buildOnPreview: false,
+      exec: false,
       context: { location: ".." },
       dockerfile: { location: "../windrun-ai/Dockerfile" },
       platforms: ["linux/amd64"],
@@ -95,15 +95,38 @@ describe("Cloud Run application stacks", () => {
       tags: [tag],
     });
     expect(image.retainOnDelete).toBe(true);
+    expect(image.provider).toContain(
+      mockUrn(
+        "pulumi:providers:docker-build",
+        "production-docker-build",
+        "production",
+      ),
+    );
 
-    expect(isRpcSecret(image.inputs.registries)).toBe(true);
-    expect(unwrapRpcSecret(image.inputs.registries)).toEqual([
-      {
-        address: `${REGION}-docker.pkg.dev`,
-        username: "oauth2accesstoken",
-        password: "mock-access-token",
+    const dockerProviders = resourcesOfType(
+      "pulumi:providers:docker-build",
+    );
+    expect(dockerProviders).toHaveLength(1);
+    expect(dockerProviders[0].inputs).toEqual({ host: "" });
+
+    expect(image.inputs.registries).toBeUndefined();
+    const exportedCheckpoint = {
+      version: 3,
+      deployment: {
+        manifest: {},
+        pending_operations: [],
+        resources: capturedResources.map((resource) => ({
+          urn: mockUrn(resource.type, resource.name, "production"),
+          type: resource.type,
+          custom: true,
+          inputs: resource.inputs,
+          outputs: resource.inputs,
+        })),
       },
-    ]);
+    };
+    expect(JSON.stringify(exportedCheckpoint)).not.toContain(
+      "mock-access-token",
+    );
 
     expect(resolved).toEqual([
       "https://app.windrun.ai",
@@ -264,7 +287,7 @@ describe("Cloud Run application stacks", () => {
     ).toThrow("gitCommitSha must be a lowercase 40-character Git SHA");
   });
 
-  it("registers no IAM or edge resource and uses the explicit provider for its invoke", async () => {
+  it("registers no IAM, edge, or credential-discovery operation", async () => {
     await createFixture("production");
 
     expect(
@@ -272,15 +295,13 @@ describe("Cloud Run application stacks", () => {
     ).toEqual([
       "docker-build:index:Image",
       "gcp:cloudrunv2/service:Service",
+      "pulumi:providers:docker-build",
       "pulumi:providers:gcp",
     ]);
     expect(gcpResourcesWithoutExplicitProvider()).toEqual([]);
-    expect(capturedCalls).toHaveLength(1);
-    expect(capturedCalls[0].token).toBe(
-      "gcp:organizations/getClientConfig:getClientConfig",
-    );
-    expect(capturedCalls[0].provider).toContain(
-      mockUrn("pulumi:providers:gcp", "gcp-production", "production"),
+    expect(capturedCalls).toEqual([]);
+    expect(JSON.stringify(capturedResources)).not.toMatch(
+      /oauth2accesstoken|mock-access-token/u,
     );
   });
 });

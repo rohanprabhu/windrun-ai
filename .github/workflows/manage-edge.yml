@@ -19,9 +19,11 @@ jobs:
       github.ref == 'refs/heads/main' &&
       vars.PULUMI_CI_ENABLED == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     environment: ${{ inputs.stack }}
     permissions:
       contents: read
+      actions: read
       id-token: write
     concurrency:
       group: windrun-${{ inputs.stack }}
@@ -33,6 +35,10 @@ jobs:
       - uses: ./.github/actions/setup
       - run: pnpm ci:validate-contract
       - run: pnpm ci:quality
+      - id: live-gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/assert-deployment-current.mjs branch main "${{ github.sha }}" "${{ startsWith(inputs.stack, 'production') && 'production' || 'staging' }}"
       - uses: ./.github/actions/auth-cloud
         with:
           pulumi-organization: ${{ vars.PULUMI_ORGANIZATION }}

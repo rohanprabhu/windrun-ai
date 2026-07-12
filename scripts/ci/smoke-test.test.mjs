@@ -25,14 +25,37 @@ function healthResponse(response, status, payload) {
   response.end(JSON.stringify(payload))
 }
 
+function responseAtUrl(response, url) {
+  Object.defineProperty(response, 'url', {
+    configurable: true,
+    value: String(url),
+  })
+  return response
+}
+
 function options(overrides = {}) {
   return {
     attempts: 3,
     delayMs: 0,
     fetchImpl: fetch,
     sleep: async () => {},
+    requestTimeoutMs: 100,
+    overallTimeoutMs: 1_000,
+    maxBodyBytes: 64 * 1024,
     ...overrides,
   }
+}
+
+async function settleWithin(promise, milliseconds = 250) {
+  return Promise.race([
+    promise.then(
+      (value) => ({ status: 'fulfilled', value }),
+      (error) => ({ status: 'rejected', error }),
+    ),
+    new Promise((resolve) =>
+      setTimeout(() => resolve({ status: 'pending' }), milliseconds),
+    ),
+  ])
 }
 
 test('returns 200 when health succeeds immediately', async () => {
@@ -155,18 +178,43 @@ test('reports only the final status after retry exhaustion', async () => {
   assert.equal(sleeps, 2)
 })
 
+test('overall deadline cancels the production retry delay timer', async () => {
+  const startedAt = Date.now()
+  const fetchImpl = async (url) =>
+    responseAtUrl(
+      new Response(JSON.stringify({ ok: false }), { status: 503 }),
+      url,
+    )
+
+  await assert.rejects(
+    smokeTest('https://example.invalid/api/health', {
+      attempts: 2,
+      delayMs: 500,
+      fetchImpl,
+      requestTimeoutMs: 100,
+      overallTimeoutMs: 20,
+      maxBodyBytes: 1024,
+    }),
+    /overall deadline timed out/i,
+  )
+  assert.ok(Date.now() - startedAt < 200)
+})
+
 test('retries network errors but stops immediately on an unlisted status', async () => {
   let fetchCalls = 0
   let sleeps = 0
-  const fetchImpl = async () => {
+  const fetchImpl = async (url) => {
     fetchCalls += 1
     if (fetchCalls === 1) {
       throw new Error('socket error with private detail')
     }
-    return new Response(JSON.stringify({ ok: false }), {
-      status: 401,
-      headers: { 'content-type': 'application/json' },
-    })
+    return responseAtUrl(
+      new Response(JSON.stringify({ ok: false }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      }),
+      url,
+    )
   }
 
   await assert.rejects(
@@ -188,6 +236,123 @@ test('retries network errors but stops immediately on an unlisted status', async
 
   assert.equal(fetchCalls, 2)
   assert.equal(sleeps, 1)
+})
+
+test('bounds a fetch that never returns response headers', async () => {
+  const outcome = await settleWithin(
+    smokeTest(
+      'https://example.invalid/api/health',
+      options({
+        attempts: 1,
+        requestTimeoutMs: 20,
+        overallTimeoutMs: 50,
+        fetchImpl: async () => new Promise(() => {}),
+      }),
+    ),
+  )
+
+  assert.equal(outcome.status, 'rejected')
+  assert.match(outcome.error.message, /timeout/i)
+})
+
+test('bounds a 200 response body that never finishes', async () => {
+  const neverBody = new ReadableStream({ start() {} })
+  const outcome = await settleWithin(
+    smokeTest(
+      'https://example.invalid/api/health',
+      options({
+        attempts: 1,
+        requestTimeoutMs: 20,
+        overallTimeoutMs: 50,
+        fetchImpl: async () => ({
+          status: 200,
+          ok: true,
+          url: 'https://example.invalid/api/health',
+          headers: new Headers(),
+          body: neverBody,
+          async json() {
+            return new Promise(() => {})
+          },
+        }),
+      }),
+    ),
+  )
+
+  assert.equal(outcome.status, 'rejected')
+  assert.match(outcome.error.message, /timeout/i)
+})
+
+test('does not wait forever for a body reader whose cancel never finishes', async () => {
+  const outcome = await settleWithin(
+    smokeTest(
+      'https://example.invalid/api/health',
+      options({
+        attempts: 1,
+        requestTimeoutMs: 20,
+        overallTimeoutMs: 50,
+        fetchImpl: async () => ({
+          status: 200,
+          ok: true,
+          url: 'https://example.invalid/api/health',
+          headers: new Headers(),
+          body: {
+            getReader() {
+              return {
+                read: async () => new Promise(() => {}),
+                cancel: async () => new Promise(() => {}),
+              }
+            },
+          },
+        }),
+      }),
+    ),
+  )
+
+  assert.equal(outcome.status, 'rejected')
+  assert.match(outcome.error.message, /timeout/i)
+})
+
+test('rejects oversized health JSON before parsing it', async () => {
+  await assert.rejects(
+    smokeTest(
+      'https://example.invalid/api/health',
+      options({
+        attempts: 1,
+        maxBodyBytes: 32,
+        fetchImpl: async (url) =>
+          responseAtUrl(
+            new Response(
+              JSON.stringify({ ok: true, padding: 'x'.repeat(100) }),
+              { status: 200 },
+            ),
+            url,
+          ),
+      }),
+    ),
+    /body exceeded 32 bytes/i,
+  )
+})
+
+test('rejects a final response URL outside the exact health endpoint', async () => {
+  await assert.rejects(
+    smokeTest(
+      'https://example.invalid/api/health',
+      options({
+        attempts: 1,
+        fetchImpl: async () => ({
+          status: 200,
+          ok: true,
+          url: 'https://attacker.invalid/collect',
+          headers: new Headers(),
+          body: new Response(JSON.stringify({ ok: true })).body,
+          async json() {
+            return { ok: true }
+          },
+        }),
+      }),
+    ),
+    /left the requested endpoint/i,
+  )
 })
 
 test('reads the exact smoke-test CLI contract', () => {

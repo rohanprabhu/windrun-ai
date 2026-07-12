@@ -1,4 +1,5 @@
 config:
   pulumi:disable-default-providers:
     - gcp
+    - docker-build
   windrun-ai:stackKind: staging

@@ -21,5 +21,7 @@ export interface RawStackConfig {
   pullRequestNumber?: number;
   allowProjectDeletion?: boolean;
   enablePulumiGithubOidc?: boolean;
+  productionCiEnabled?: boolean;
+  stagingCiEnabled?: boolean;
   pulumiOrganization?: string;
 }

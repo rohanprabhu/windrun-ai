@@ -84,6 +84,8 @@ export interface GitHubDeliveryResources {
 export function createGitHubDeliveryResources(args: {
   pulumiOrganization: string;
   foundation: FoundationOutputs;
+  productionCiEnabled: boolean;
+  stagingCiEnabled: boolean;
 }): GitHubDeliveryResources {
   const provider = new github.Provider("github-windrun", {
     owner: githubOwner,
@@ -150,6 +152,8 @@ export function createGitHubDeliveryResources(args: {
     GCP_WIF_PROVIDER_FOUNDATION: args.foundation.foundationWifProvider,
     GCP_SERVICE_ACCOUNT_FOUNDATION:
       args.foundation.foundationDeployServiceAccount,
+    PULUMI_PRODUCTION_ENABLED: String(args.productionCiEnabled),
+    PULUMI_STAGING_ENABLED: String(args.stagingCiEnabled),
   };
   const variables = Object.entries(values).map(
     ([variableName, value]) =>

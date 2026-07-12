@@ -26,13 +26,15 @@ jobs:
       inputs.merge-sha == github.event.pull_request.merge_commit_sha &&
       inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     environment: preview
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: write
     concurrency:
-      group: windrun-preview-${{ inputs.pr-number }}
+      group: windrun-preview-mutation-${{ inputs.pr-number }}
       cancel-in-progress: false
     steps:
       - name: Check out trusted platform
@@ -41,21 +43,37 @@ jobs:
           ref: refs/heads/main
           path: platform
           persist-credentials: false
+      - uses: ./platform/.github/actions/setup
+        with:
+          working-directory: platform
+      - id: freshness
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node platform/scripts/ci/assert-deployment-current.mjs preview "${{ inputs.pr-number }}" "${{ inputs.merge-sha }}" staging
       - name: Check out preview application source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ inputs.merge-sha }}
           path: source
           persist-credentials: false
-      - uses: ./platform/.github/actions/setup
-        with:
-          working-directory: platform
       - uses: ./platform/.github/actions/auth-cloud
         with:
           pulumi-organization: ${{ vars.PULUMI_ORGANIZATION }}
           gcp-project-id: windrun-ai-staging-20260712
           workload-identity-provider: ${{ vars.GCP_WIF_PROVIDER_PREVIEW }}
           service-account: ${{ vars.GCP_SERVICE_ACCOUNT_PREVIEW }}
+      - name: Install Pulumi
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          work-dir: platform/infra
+      - id: configure-preview-stack
+        working-directory: platform/infra
+        env:
+          PREVIEW_STACK: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/pr-${{ inputs.pr-number }}
+        run: |
+          pnpm exec pulumi stack select --create "${PREVIEW_STACK}"
+          pnpm exec pulumi config set --path 'pulumi:disable-default-providers[0]' gcp --stack "${PREVIEW_STACK}"
+          pnpm exec pulumi config set --path 'pulumi:disable-default-providers[1]' docker-build --stack "${PREVIEW_STACK}"
       - uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
         env:
           WINDRUN_APP_SOURCE: ${{ github.workspace }}/source
@@ -87,6 +105,9 @@ jobs:
               value: ${{ inputs.pr-number }}
             windrun-ai:gitCommitSha:
               value: ${{ inputs.merge-sha }}
+      - run: |
+          set -o pipefail
+          pnpm --dir platform/infra exec pulumi stack export --stack "${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/pr-${{ inputs.pr-number }}" | node platform/scripts/ci/validate-app-checkpoint.mjs
       - id: smoke
         run: node platform/scripts/ci/smoke-test.mjs "${{ inputs.preview-url }}/api/health" --attempts 30 --delay-ms 10000
       - name: Update preview comment

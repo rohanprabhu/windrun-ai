@@ -99,6 +99,8 @@ function deliveryArgs(enablePulumiGithubOidc: boolean): DeliveryStackArgs {
   return {
     pulumiOrganization,
     enablePulumiGithubOidc,
+    productionCiEnabled: enablePulumiGithubOidc,
+    stagingCiEnabled: enablePulumiGithubOidc,
     foundation,
   };
 }
@@ -298,7 +300,7 @@ describe("local-only delivery stack", () => {
     const variables = resourcesOfType(
       "github:index/actionsVariable:ActionsVariable",
     );
-    expect(variables).toHaveLength(14);
+    expect(variables).toHaveLength(16);
     const values = Object.fromEntries(
       variables.map((variable) => [
         variable.inputs.variableName,
@@ -308,6 +310,8 @@ describe("local-only delivery stack", () => {
     expect(values).toEqual({
       ...expectedVariableValues,
       PULUMI_CI_ENABLED: "true",
+      PULUMI_PRODUCTION_ENABLED: "true",
+      PULUMI_STAGING_ENABLED: "true",
     });
     expect(JSON.stringify(values)).not.toContain(githubToken);
     expect(JSON.stringify(values)).not.toContain(pulumiAccessToken);
@@ -339,6 +343,51 @@ describe("local-only delivery stack", () => {
         .map((resource) => mockUrn(resource.type, resource.name, "delivery"))
         .sort(),
     );
+  });
+
+  it("removes disabled-scope OIDC policies and publishes persistent scope gates", async () => {
+    await setWindrunMocks("delivery");
+    const outputs = withCredentialEnvironment({ githubToken, pulumiAccessToken }, () =>
+      createDeliveryStack({
+        ...deliveryArgs(true),
+        productionCiEnabled: false,
+        stagingCiEnabled: true,
+      }),
+    );
+    await resolveOutput(outputs.ciEnabled);
+
+    const variables = Object.fromEntries(
+      resourcesOfType("github:index/actionsVariable:ActionsVariable").map(
+        (resource) => [
+          resource.inputs.variableName,
+          resource.inputs.value,
+        ],
+      ),
+    );
+    expect(variables.PULUMI_CI_ENABLED).toBe("true");
+    expect(variables.PULUMI_PRODUCTION_ENABLED).toBe("false");
+    expect(variables.PULUMI_STAGING_ENABLED).toBe("true");
+
+    const issuer = resourcesOfType(
+      "pulumiservice:index:OidcIssuer",
+    )[0];
+    const policies = issuer.inputs.policies as Array<{
+      rules: { environment: string };
+    }>;
+    expect(
+      policies.some(
+        (policy: { rules: { environment: string } }) =>
+          policy.rules.environment === "production" ||
+          policy.rules.environment === "production-edge",
+      ),
+    ).toBe(false);
+    expect(
+      policies.some(
+        (policy: { rules: { environment: string } }) =>
+          policy.rules.environment === "staging" ||
+          policy.rules.environment === "preview",
+      ),
+    ).toBe(true);
   });
 
   it("creates exact immutable Pulumi personal-token trust when enabled", async () => {
@@ -396,7 +445,7 @@ describe("local-only delivery stack", () => {
       (variable) => variable.inputs.variableName === "PULUMI_CI_ENABLED",
     );
     expect(gate?.inputs.value).toBe("false");
-    expect(gate?.dependencies).toHaveLength(26);
+    expect(gate?.dependencies).toHaveLength(28);
   });
 
   it("creates no repository, cloud, workflow, secret, or key resource", async () => {

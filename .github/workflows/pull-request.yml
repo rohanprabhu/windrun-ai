@@ -5,10 +5,14 @@ on:
     types: [opened, reopened, synchronize, closed]
 permissions:
   contents: read
+concurrency:
+  group: windrun-preview-event-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 jobs:
   quality:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -22,10 +26,12 @@ jobs:
     if: >-
       needs.quality.result == 'success' &&
       vars.PULUMI_CI_ENABLED == 'true' &&
+      vars.PULUMI_STAGING_ENABLED == 'true' &&
       github.event.pull_request.head.repo.id == github.event.repository.id &&
       github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: write
     uses: rohanprabhu/windrun-ai/.github/workflows/_preview-deploy.yml@main
@@ -37,10 +43,12 @@ jobs:
     if: >-
       github.event.action == 'closed' &&
       vars.PULUMI_CI_ENABLED == 'true' &&
+      vars.PULUMI_STAGING_ENABLED == 'true' &&
       github.event.pull_request.head.repo.id == github.event.repository.id &&
       github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
+      actions: read
       id-token: write
       pull-requests: write
     uses: rohanprabhu/windrun-ai/.github/workflows/_preview-destroy.yml@main

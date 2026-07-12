@@ -122,6 +122,8 @@ describe("parseStackContext", () => {
       parseStackContext("delivery", {
         stackKind: "delivery",
         enablePulumiGithubOidc: true,
+        productionCiEnabled: true,
+        stagingCiEnabled: true,
         pulumiOrganization: "rohan",
       }),
     ).toEqual({ kind: "delivery", stackName: "delivery" });
