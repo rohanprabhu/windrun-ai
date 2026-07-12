@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
   mkdtempSync,
@@ -11,6 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import {
   createPulumiOperations,
@@ -18,11 +20,22 @@ import {
 } from './lib/pulumi.mjs'
 import { bootstrapPlatform, PHASE_ONE_STACKS } from './bootstrap-platform.mjs'
 import { destroyEnvironment } from './destroy-environment.mjs'
+import { destroyPlatform } from './destroy-platform.mjs'
 
 const LOGIN = 'bootstrap-user'
 const PROJECT = 'windrun-ai'
 const OWNER_EMAIL = 'rohan@windrun.ai'
 const GIT_SHA = '0123456789abcdef0123456789abcdef01234567'
+const MANAGED_BACKEND = 'https://api.pulumi.com'
+const PULUMI_TOKEN = 'pulumi-platform-token-fixture'
+const GITHUB_TOKEN = 'github-platform-token-fixture'
+const PROJECT_IDS = Object.freeze([
+  'windrun-ai-shared-20260712',
+  'windrun-ai-staging-20260712',
+  'windrun-ai-prod-20260712',
+])
+const PLATFORM_REFUSAL =
+  'REFUSED: pass --destroy-projects to acknowledge deletion of all three GCP projects'
 
 function commandText(executable, args) {
   return [executable, ...args].join(' ')
@@ -561,6 +574,846 @@ for (const argv of [
   })
 }
 
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function stackUrn(stack, type, name) {
+  return `urn:pulumi:${stack}::windrun-ai::${type}::${name}`
+}
+
+function platformStackState(stack, resources = []) {
+  return {
+    version: 3,
+    deployment: {
+      manifest: {},
+      pending_operations: [],
+      resources: [
+        {
+          urn: stackUrn(
+            stack,
+            'pulumi:pulumi:Stack',
+            `windrun-ai-${stack}`,
+          ),
+          type: 'pulumi:pulumi:Stack',
+          custom: false,
+          inputs: {},
+          outputs: {},
+        },
+        ...resources,
+      ],
+    },
+  }
+}
+
+function platformResource(stack, type, name, inputs, protect = true) {
+  const resource = {
+    urn: stackUrn(stack, type, name),
+    type,
+    custom: true,
+    id: `${name}-id`,
+    inputs: cloneJson(inputs),
+    outputs: cloneJson(inputs),
+  }
+  if (protect) resource.protect = true
+  return resource
+}
+
+function normalFoundationState() {
+  return platformStackState('foundation', [
+    ...PROJECT_IDS.map((projectId) =>
+      platformResource(
+        'foundation',
+        'gcp:organizations/project:Project',
+        projectId,
+        { projectId, deletionPolicy: 'PREVENT' },
+      ),
+    ),
+    platformResource(
+      'foundation',
+      'gcp:dns/managedZone:ManagedZone',
+      'shared-zone',
+      { project: PROJECT_IDS[0], name: 'app-windrun-ai' },
+    ),
+  ])
+}
+
+function transitionedFoundationState() {
+  const state = normalFoundationState()
+  for (const resource of state.deployment.resources) {
+    if (resource.type === 'pulumi:pulumi:Stack') continue
+    delete resource.protect
+    if (resource.type === 'gcp:organizations/project:Project') {
+      resource.inputs.deletionPolicy = 'DELETE'
+      resource.outputs.deletionPolicy = 'DELETE'
+    }
+  }
+  return state
+}
+
+function foundationTransitionPreview(state = normalFoundationState()) {
+  const steps = state.deployment.resources.map((resource) => {
+    const oldState = cloneJson(resource)
+    const newState = cloneJson(resource)
+    const isRoot = resource.type === 'pulumi:pulumi:Stack'
+    const isProject =
+      resource.type === 'gcp:organizations/project:Project'
+    if (!isRoot) delete newState.protect
+    if (isProject) {
+      newState.inputs.deletionPolicy = 'DELETE'
+      newState.outputs.deletionPolicy = 'DELETE'
+    }
+    return {
+      op: isProject ? 'update' : 'same',
+      urn: resource.urn,
+      oldState,
+      newState,
+      diffReasons: isProject ? ['deletionPolicy'] : [],
+      detailedDiff: isProject
+        ? {
+            deletionPolicy: {
+              kind: 'update',
+              inputDiff: true,
+            },
+          }
+        : {},
+    }
+  })
+  return `${JSON.stringify({
+    steps,
+    diagnostics: [],
+    changeSummary: {
+      same: state.deployment.resources.length - 3,
+      update: 3,
+    },
+    maybeCorrupt: false,
+  })}\n`
+}
+
+function createPlatformHarness() {
+  const refs = Object.fromEntries(
+    [
+      'pr-10',
+      'pr-2',
+      'staging',
+      'production',
+      'staging-edge',
+      'production-edge',
+      'delivery',
+      'foundation',
+    ].map((stack) => [stack, stackRef(LOGIN, stack)]),
+  )
+  const stackStates = new Map([
+    [
+      refs['pr-10'],
+      platformStackState('pr-10', [
+        platformResource(
+          'pr-10',
+          'gcp:cloudrunv2/service:Service',
+          'preview-10',
+          { name: 'preview-10' },
+          false,
+        ),
+      ]),
+    ],
+    [
+      refs['pr-2'],
+      platformStackState('pr-2', [
+        platformResource(
+          'pr-2',
+          'gcp:cloudrunv2/service:Service',
+          'preview-2',
+          { name: 'preview-2' },
+          false,
+        ),
+      ]),
+    ],
+    ...[
+      'staging',
+      'production',
+      'staging-edge',
+      'production-edge',
+    ].map((stack) => [
+      refs[stack],
+      platformStackState(stack, [
+        platformResource(
+          stack,
+          'gcp:cloudrunv2/service:Service',
+          `${stack}-service`,
+          { name: `${stack}-service` },
+          false,
+        ),
+      ]),
+    ]),
+    [
+      refs.delivery,
+      platformStackState('delivery', [
+        platformResource(
+          'delivery',
+          'github:index/actionsVariable:ActionsVariable',
+          'ci-enabled',
+          { variableName: 'PULUMI_CI_ENABLED', value: 'true' },
+          false,
+        ),
+      ]),
+    ],
+    [refs.foundation, normalFoundationState()],
+  ])
+  const controls = {
+    keepAfterDestroy: new Set(),
+    transitionPreview: undefined,
+    transitionState: transitionedFoundationState(),
+    recoveryState: normalFoundationState(),
+    googleIdentityFailureAt: undefined,
+    githubStatus:
+      'github.com\n  ✓ Logged in to github.com account rohanprabhu\n  - Active account: true\n',
+  }
+  const calls = []
+  const events = []
+  const logs = []
+  const stdout = []
+  const stderr = []
+  const providerEnvironmentRefs = []
+  const providerEnvironmentSnapshots = []
+  let foundationConfigValue = 'false'
+  let foundationUpCount = 0
+  let googleIdentityChecks = 0
+
+  function recordPulumi(args, options, boundary) {
+    const environmentSnapshot = { ...(options.env || {}) }
+    calls.push({
+      boundary,
+      command: 'pulumi',
+      args: [...args],
+      environment: environmentSnapshot,
+    })
+    events.push(`pulumi:${args.join(' ')}`)
+    if (
+      environmentSnapshot.PULUMI_ACCESS_TOKEN === PULUMI_TOKEN &&
+      environmentSnapshot.GITHUB_TOKEN === GITHUB_TOKEN
+    ) {
+      providerEnvironmentRefs.push(options.env)
+      providerEnvironmentSnapshots.push(environmentSnapshot)
+    }
+  }
+
+  async function handlePulumi(args, options = {}, boundary) {
+    recordPulumi(args, options, boundary)
+    if (args[0] === 'whoami') {
+      return {
+        stdout: JSON.stringify({ user: LOGIN, url: MANAGED_BACKEND }),
+        stderr: '',
+      }
+    }
+    if (args[0] === 'stack' && args[1] === 'ls') {
+      return {
+        stdout: JSON.stringify(
+          [...stackStates.keys()].map((name) => ({ name })),
+        ),
+        stderr: '',
+      }
+    }
+    if (args[0] === 'stack' && args[1] === 'export') {
+      const state = stackStates.get(args.at(-1))
+      if (!state) throw new Error('stack not found')
+      return { stdout: JSON.stringify(state), stderr: '' }
+    }
+    if (args[0] === 'config' && args[1] === 'set') {
+      if (args[2] === 'windrun-ai:allowProjectDeletion') {
+        foundationConfigValue = args[3]
+        events.push(`foundation-config:${args[3]}`)
+      }
+      if (args[2] === 'windrun-ai:enablePulumiGithubOidc') {
+        events.push(`delivery-config:${args[3]}`)
+      }
+      return { stdout: '', stderr: '' }
+    }
+    if (args[0] === 'preview' && args.at(-1) === refs.foundation) {
+      const output =
+        foundationConfigValue === 'true'
+          ? controls.transitionPreview ||
+            foundationTransitionPreview(stackStates.get(refs.foundation))
+          : `${JSON.stringify({
+              steps: [],
+              diagnostics: [],
+              changeSummary: {},
+              maybeCorrupt: false,
+            })}\n`
+      return { stdout: output, stderr: '' }
+    }
+    if (args[0] === 'up' && args.at(-1) === refs.foundation) {
+      foundationUpCount += 1
+      stackStates.set(
+        refs.foundation,
+        cloneJson(
+          foundationConfigValue === 'true'
+            ? controls.transitionState
+            : controls.recoveryState,
+        ),
+      )
+      return { stdout: '', stderr: '' }
+    }
+    if (args[0] === 'destroy') {
+      const reference = args.at(-1)
+      events.push(`destroy:${reference}`)
+      if (!controls.keepAfterDestroy.has(reference)) {
+        stackStates.delete(reference)
+      }
+      const isDelivery = reference === refs.delivery
+      return {
+        stdout: isDelivery
+          ? `provider output ${PULUMI_TOKEN} ${GITHUB_TOKEN}\n`
+          : '',
+        stderr: isDelivery
+          ? `provider warning ${GITHUB_TOKEN} ${PULUMI_TOKEN}\n`
+          : '',
+      }
+    }
+    if (
+      (args[0] === 'preview' || args[0] === 'up') &&
+      args.at(-1) === refs.delivery
+    ) {
+      return {
+        stdout: `provider output ${PULUMI_TOKEN} ${GITHUB_TOKEN}\n`,
+        stderr: `provider warning ${GITHUB_TOKEN} ${PULUMI_TOKEN}\n`,
+      }
+    }
+    return { stdout: '', stderr: '' }
+  }
+
+  const dependencies = {
+    async runPulumi(args, options = {}) {
+      return (await handlePulumi(args, options, 'runPulumi')).stdout
+    },
+    async runLifecycleCommand(command, args, options = {}) {
+      if (command === 'pulumi') {
+        return handlePulumi(args, options, 'runLifecycleCommand')
+      }
+      calls.push({
+        boundary: 'runLifecycleCommand',
+        command,
+        args: [...args],
+        environment: { ...(options.env || {}) },
+      })
+      events.push(`${command}:${args.join(' ')}`)
+      if (command === 'gh' && args[1] === 'status') {
+        return {
+          stdout: controls.githubStatus,
+          stderr: '',
+        }
+      }
+      if (command === 'gh' && args[1] === 'token') {
+        return { stdout: `${GITHUB_TOKEN}\n`, stderr: '' }
+      }
+      throw new Error('unexpected lifecycle command')
+    },
+    async runPnpmScript(script) {
+      events.push(`pnpm:${script}`)
+    },
+    async assertGoogleIdentity() {
+      googleIdentityChecks += 1
+      events.push(`google-identity:${googleIdentityChecks}`)
+      if (controls.googleIdentityFailureAt === googleIdentityChecks) {
+        throw new Error('Google identity rejected')
+      }
+    },
+    async readFile(path) {
+      events.push(`read:${path}`)
+      return JSON.stringify({
+        current: MANAGED_BACKEND,
+        accounts: {
+          [MANAGED_BACKEND]: { accessToken: PULUMI_TOKEN },
+        },
+      })
+    },
+    environment: {
+      PATH: process.env.PATH,
+      PULUMI_CREDENTIALS_PATH: '/pulumi',
+      PULUMI_ACCESS_TOKEN: 'ambient-pulumi-token',
+      GITHUB_TOKEN: 'ambient-github-token',
+      GH_TOKEN: 'ambient-gh-token',
+      PULUMI_ENABLE_STREAMING_JSON_PREVIEW: 'true',
+    },
+    log(message) {
+      logs.push(message)
+    },
+    writeStdout(value) {
+      stdout.push(value)
+    },
+    writeStderr(value) {
+      stderr.push(value)
+    },
+  }
+
+  return {
+    calls,
+    controls,
+    dependencies,
+    events,
+    get foundationUpCount() {
+      return foundationUpCount
+    },
+    logs,
+    providerEnvironmentRefs,
+    providerEnvironmentSnapshots,
+    refs,
+    stackStates,
+    stderr,
+    stdout,
+  }
+}
+
+async function executeFullPlatformDestroy(harness) {
+  return destroyPlatform({
+    argv: ['--destroy-projects'],
+    ...harness.dependencies,
+  })
+}
+
+test('direct full teardown refusal exits two exactly without running a process', () => {
+  const root = mkdtempSync(join(tmpdir(), 'windrun-destroy-refusal-'))
+  const bin = join(root, 'bin')
+  const logPath = join(root, 'pulumi.log')
+  const pulumiPath = join(bin, 'pulumi')
+
+  try {
+    mkdirSync(bin)
+    writeFileSync(logPath, '')
+    writeExecutable(
+      pulumiPath,
+      `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+appendFileSync(process.env.PULUMI_FAKE_LOG, 'called\\n')
+`,
+    )
+    const result = spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL('./destroy-platform.mjs', import.meta.url))],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PULUMI_BIN: pulumiPath,
+          PULUMI_FAKE_LOG: logPath,
+        },
+      },
+    )
+
+    assert.equal(result.status, 2)
+    assert.equal(result.stdout, '')
+    assert.equal(result.stderr, `${PLATFORM_REFUSAL}\n`)
+    assert.equal(readFileSync(logPath, 'utf8'), '')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('full teardown enforces exact stack, CI-disable, identity, and foundation order', async () => {
+  const harness = createPlatformHarness()
+
+  await executeFullPlatformDestroy(harness)
+
+  assert.deepEqual(
+    harness.events
+      .filter((event) => event.startsWith('destroy:'))
+      .map((event) => event.slice(event.lastIndexOf('/') + 1)),
+    [
+      'pr-2',
+      'pr-10',
+      'staging',
+      'production',
+      'staging-edge',
+      'production-edge',
+      'delivery',
+      'foundation',
+    ],
+  )
+
+  const contractIndex = harness.events.indexOf(
+    'pnpm:ci:validate-contract',
+  )
+  const qualityIndex = harness.events.indexOf('pnpm:ci:quality')
+  const deliveryConfigIndex = harness.events.indexOf(
+    'delivery-config:false',
+  )
+  const deliveryPreviewIndex = harness.events.indexOf(
+    `pulumi:preview --stack ${harness.refs.delivery}`,
+  )
+  const deliveryUpIndex = harness.events.indexOf(
+    `pulumi:up --yes --stack ${harness.refs.delivery}`,
+  )
+  const deliveryDestroyIndex = harness.events.indexOf(
+    `destroy:${harness.refs.delivery}`,
+  )
+  const firstGoogleIdentityIndex = harness.events.indexOf(
+    'google-identity:1',
+  )
+  const googleIdentityIndex = harness.events.indexOf('google-identity:2')
+  const firstDestroyIndex = harness.events.findIndex((event) =>
+    event.startsWith('destroy:'),
+  )
+  const finalInventoryIndex = harness.events.findIndex(
+    (event, index) =>
+      index > deliveryDestroyIndex &&
+      event ===
+        'pulumi:stack ls --json --fully-qualify-stack-names',
+  )
+  const foundationConfigIndex = harness.events.indexOf(
+    'foundation-config:true',
+  )
+  const foundationPreviewIndex = harness.events.indexOf(
+    `pulumi:preview --json --diff --suppress-outputs --stack ${harness.refs.foundation}`,
+  )
+  const foundationUpIndex = harness.events.indexOf(
+    `pulumi:up --yes --stack ${harness.refs.foundation}`,
+  )
+  assert.ok(contractIndex >= 0)
+  assert.ok(contractIndex < qualityIndex)
+  assert.ok(qualityIndex < deliveryConfigIndex)
+  assert.ok(deliveryConfigIndex < deliveryPreviewIndex)
+  assert.ok(deliveryPreviewIndex < deliveryUpIndex)
+  assert.ok(deliveryUpIndex < deliveryDestroyIndex)
+  assert.ok(firstGoogleIdentityIndex >= 0)
+  assert.ok(firstGoogleIdentityIndex < firstDestroyIndex)
+  assert.ok(deliveryDestroyIndex < googleIdentityIndex)
+  assert.ok(googleIdentityIndex < finalInventoryIndex)
+  assert.ok(finalInventoryIndex < foundationConfigIndex)
+  assert.ok(foundationConfigIndex < foundationPreviewIndex)
+  assert.ok(foundationPreviewIndex < foundationUpIndex)
+
+  const listCalls = harness.calls.filter(
+    ({ command, args }) =>
+      command === 'pulumi' && args[0] === 'stack' && args[1] === 'ls',
+  )
+  assert.ok(listCalls.length >= 3)
+  assert.deepEqual(
+    listCalls.map(({ args }) => args),
+    listCalls.map(() => [
+      'stack',
+      'ls',
+      '--json',
+      '--fully-qualify-stack-names',
+    ]),
+  )
+  assert.ok(deliveryDestroyIndex < finalInventoryIndex)
+
+  assert.equal(harness.providerEnvironmentSnapshots.length, 3)
+  assert.equal(
+    harness.providerEnvironmentSnapshots.every(
+      (environment) =>
+        environment.PULUMI_ACCESS_TOKEN === PULUMI_TOKEN &&
+        environment.GITHUB_TOKEN === GITHUB_TOKEN,
+    ),
+    true,
+  )
+  assert.equal(
+    harness.providerEnvironmentRefs.every(
+      (environment) =>
+        !('PULUMI_ACCESS_TOKEN' in environment) &&
+        !('GITHUB_TOKEN' in environment),
+    ),
+    true,
+  )
+  const nonProviderCalls = harness.calls.filter(
+    ({ environment }) =>
+      environment.PULUMI_ACCESS_TOKEN !== PULUMI_TOKEN &&
+      environment.GITHUB_TOKEN !== GITHUB_TOKEN,
+  )
+  assert.equal(
+    nonProviderCalls.every(
+      ({ environment }) =>
+        !('PULUMI_ACCESS_TOKEN' in environment) &&
+        !('GITHUB_TOKEN' in environment) &&
+        !('GH_TOKEN' in environment) &&
+        !('PULUMI_ENABLE_STREAMING_JSON_PREVIEW' in environment),
+    ),
+    true,
+  )
+  const observable = JSON.stringify({
+    calls: harness.calls.map(({ command, args }) => ({ command, args })),
+    logs: harness.logs,
+    stderr: harness.stderr,
+    stdout: harness.stdout,
+  })
+  assert.doesNotMatch(observable, new RegExp(PULUMI_TOKEN, 'u'))
+  assert.doesNotMatch(observable, new RegExp(GITHUB_TOKEN, 'u'))
+  assert.match(harness.stdout.join(''), /\[credential\]/u)
+  assert.match(harness.logs.at(-1), /DELETE_REQUESTED/u)
+  assert.match(harness.logs.at(-1), /30-day recovery window/u)
+  assert.match(harness.logs.at(-1), /permanently unavailable/u)
+})
+
+test('wrong Google identity causes zero Pulumi mutation', async () => {
+  const harness = createPlatformHarness()
+  harness.controls.googleIdentityFailureAt = 1
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /Google identity verification failed/,
+  )
+
+  const mutatingPulumiCalls = harness.calls.filter(
+    ({ command, args }) =>
+      command === 'pulumi' &&
+      (args[0] === 'destroy' ||
+        args[0] === 'up' ||
+        (args[0] === 'config' && args[1] === 'set')),
+  )
+  assert.deepEqual(mutatingPulumiCalls, [])
+})
+
+test('full teardown refuses ambiguous active GitHub credentials', async () => {
+  const harness = createPlatformHarness()
+  harness.controls.githubStatus =
+    'github.com\n  ✓ Logged in to github.com account rohanprabhu\n  - Active account: true\n  ✓ Logged in to github.com account attacker\n  - Active account: true\n'
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /active GitHub login must be exactly rohanprabhu/,
+  )
+
+  assert.equal(harness.events.includes('delivery-config:false'), false)
+  assert.deepEqual(harness.providerEnvironmentSnapshots, [])
+})
+
+test('full teardown refuses delivery while an earlier stack retains resources', async () => {
+  const harness = createPlatformHarness()
+  harness.controls.keepAfterDestroy.add(harness.refs.production)
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /production still contains non-root resources/,
+  )
+
+  assert.equal(
+    harness.events.some((event) => event === 'pnpm:ci:quality'),
+    false,
+  )
+  assert.deepEqual(
+    harness.events.filter((event) =>
+      event.startsWith('google-identity:'),
+    ),
+    ['google-identity:1'],
+  )
+  assert.equal(
+    harness.events.some((event) => event === 'foundation-config:true'),
+    false,
+  )
+})
+
+test('full teardown refuses foundation while delivery retains resources', async () => {
+  const harness = createPlatformHarness()
+  harness.controls.keepAfterDestroy.add(harness.refs.delivery)
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /delivery still contains non-root resources/,
+  )
+
+  assert.deepEqual(
+    harness.events.filter((event) =>
+      event.startsWith('google-identity:'),
+    ),
+    ['google-identity:1', 'google-identity:2'],
+  )
+  assert.equal(
+    harness.events.some((event) => event === 'foundation-config:true'),
+    false,
+  )
+  assert.equal(
+    harness.providerEnvironmentRefs.every(
+      (environment) =>
+        !('PULUMI_ACCESS_TOKEN' in environment) &&
+        !('GITHUB_TOKEN' in environment),
+    ),
+    true,
+  )
+})
+
+test('full teardown rejects an unexpected foundation preview before up', async () => {
+  const harness = createPlatformHarness()
+  harness.controls.transitionPreview = `${JSON.stringify({
+    steps: [
+      {
+        op: 'delete',
+        urn: stackUrn(
+          'foundation',
+          'gcp:dns/managedZone:ManagedZone',
+          'shared-zone',
+        ),
+        oldState: {},
+      },
+    ],
+    diagnostics: [],
+    changeSummary: { delete: 1 },
+    maybeCorrupt: false,
+  })}\n`
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /foundation preview/,
+  )
+
+  assert.deepEqual(
+    harness.events.filter((event) =>
+      event.startsWith('foundation-config:'),
+    ),
+    ['foundation-config:true', 'foundation-config:false'],
+  )
+  assert.equal(harness.foundationUpCount, 0)
+  assert.equal(
+    harness.events.includes(`destroy:${harness.refs.foundation}`),
+    false,
+  )
+})
+
+test('full teardown rejects malformed checkpoint flags before foundation mutation', async () => {
+  const harness = createPlatformHarness()
+  harness.stackStates.get(harness.refs.foundation)
+    .deployment.resources.at(-1).delete = 'unexpected'
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /foundation pre-transition state stack export contains unsafe resource state/,
+  )
+
+  assert.equal(
+    harness.events.includes('foundation-config:true'),
+    false,
+  )
+  assert.equal(
+    harness.events.includes(`destroy:${harness.refs.foundation}`),
+    false,
+  )
+})
+
+test('full teardown rejects malformed checkpoint collection fields', async () => {
+  const harness = createPlatformHarness()
+  harness.stackStates.get(harness.refs.foundation)
+    .deployment.resources.at(-1).initErrors = ''
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /foundation pre-transition state stack export contains unsafe resource state/,
+  )
+
+  assert.equal(harness.events.includes('foundation-config:true'), false)
+})
+
+test('full teardown rejects unsafe flags in the transition preview', async () => {
+  const harness = createPlatformHarness()
+  const preview = JSON.parse(foundationTransitionPreview())
+  preview.steps.at(-1).newState.taint = true
+  harness.controls.transitionPreview = JSON.stringify(preview)
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /foundation preview contains unsafe resource state/,
+  )
+
+  assert.equal(harness.foundationUpCount, 0)
+})
+
+test('full teardown restores protection when transition state verification fails', async () => {
+  const harness = createPlatformHarness()
+  const invalidTransition = transitionedFoundationState()
+  invalidTransition.deployment.resources.at(-1).protect = true
+  harness.controls.transitionState = invalidTransition
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /foundation transition state is not safely destroyable/,
+  )
+
+  assert.deepEqual(
+    harness.events.filter((event) =>
+      event.startsWith('foundation-config:'),
+    ),
+    ['foundation-config:true', 'foundation-config:false'],
+  )
+  assert.equal(harness.foundationUpCount, 2)
+  assert.deepEqual(
+    harness.events.filter((event) =>
+      event.startsWith('google-identity:'),
+    ),
+    ['google-identity:1', 'google-identity:2', 'google-identity:3'],
+  )
+  assert.equal(
+    harness.events.includes(`destroy:${harness.refs.foundation}`),
+    false,
+  )
+  const restored = harness.stackStates.get(harness.refs.foundation)
+  assert.equal(
+    restored.deployment.resources
+      .filter(({ type }) => type !== 'pulumi:pulumi:Stack')
+      .every(({ protect }) => protect === true),
+    true,
+  )
+  assert.deepEqual(
+    restored.deployment.resources
+      .filter(
+        ({ type }) => type === 'gcp:organizations/project:Project',
+      )
+      .map(({ inputs }) => inputs.deletionPolicy),
+    ['PREVENT', 'PREVENT', 'PREVENT'],
+  )
+})
+
+test('full teardown preserves primary and recovery verification failures', async () => {
+  const harness = createPlatformHarness()
+  const invalidTransition = transitionedFoundationState()
+  invalidTransition.deployment.resources.at(-1).protect = true
+  harness.controls.transitionState = invalidTransition
+  harness.controls.recoveryState = transitionedFoundationState()
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /foundation transition state is not safely destroyable; foundation recovery failed: foundation recovery state/,
+  )
+
+  assert.equal(harness.foundationUpCount, 2)
+})
+
+test('full teardown documentation records every destructive and recovery boundary', () => {
+  const document = readFileSync(
+    resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '..',
+      'docs',
+      'operations',
+      'teardown.md',
+    ),
+    'utf8',
+  )
+
+  for (const text of [
+    'destroy-environment.mjs --environment staging',
+    'destroy-environment.mjs --environment production',
+    'destroy-platform.mjs --destroy-projects',
+    'all numeric `pr-*` stacks',
+    '`staging`',
+    '`production`',
+    '`staging-edge`',
+    '`production-edge`',
+    '`delivery`',
+    '`foundation`',
+    'windrun-ai:enablePulumiGithubOidc=false',
+    'windrun-ai:allowProjectDeletion=true',
+    'protect:false',
+    'deletionPolicy: DELETE',
+    'DELETE_REQUESTED',
+    '30-day recovery window',
+    'permanently unavailable',
+    'gcloud auth list --filter=status:ACTIVE --format=value(account)',
+    'gcloud auth application-default print-access-token',
+    'no mutating `gcloud`, `doctl`, or `gh`',
+  ]) {
+    assert.ok(document.includes(text), `missing teardown text: ${text}`)
+  }
+  assert.ok(document.indexOf('`delivery`') < document.indexOf('`foundation`'))
+})
+
 test('the shared library is the sole lifecycle process-spawning boundary', () => {
   const operationsDirectory = resolve(
     dirname(new URL(import.meta.url).pathname),
@@ -569,6 +1422,7 @@ test('the shared library is the sole lifecycle process-spawning boundary', () =>
     'enable-ci-after-claim.mjs',
     'bootstrap-platform.mjs',
     'destroy-environment.mjs',
+    'destroy-platform.mjs',
   ]
   for (const file of productionFiles) {
     const source = readFileSync(resolve(operationsDirectory, file), 'utf8')
