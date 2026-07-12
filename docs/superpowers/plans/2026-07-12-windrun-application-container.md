@@ -57,11 +57,11 @@ packages:
   "engines": { "node": ">=22 <23" },
   "scripts": {
     "dev": "pnpm --filter @windrun/app dev",
-    "build": "pnpm -r build",
-    "test": "pnpm -r test",
+    "build": "pnpm -r --filter=!windrun-ai-platform --if-present build",
+    "test": "pnpm -r --filter=!windrun-ai-platform --if-present test",
     "test:app": "pnpm --filter @windrun/app test",
-    "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck"
+    "lint": "pnpm -r --filter=!windrun-ai-platform --if-present lint",
+    "typecheck": "pnpm -r --filter=!windrun-ai-platform --if-present typecheck"
   }
 }
 ```
