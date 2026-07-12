@@ -158,7 +158,7 @@ export function createGitHubDeliveryResources(args: {
   const variables = Object.entries(values).map(
     ([variableName, value]) =>
       new github.ActionsVariable(
-        `variable-${variableName.toLowerCase().replaceAll("_", "-")}`,
+        `variable-${variableName.toLowerCase().replace(/_/g, "-")}`,
         {
           repository: githubRepository,
           variableName,

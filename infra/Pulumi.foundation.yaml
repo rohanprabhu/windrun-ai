@@ -2,6 +2,6 @@ config:
   pulumi:disable-default-providers:
     - gcp
   windrun-ai:stackKind: foundation
-  windrun-ai:allowProjectDeletion: false
+  windrun-ai:allowProjectDeletion: "false"
   windrun-ai:digitalOceanToken:
     secure: AAABADCRKuDLJbw5qLgFpyLqtLIUERGokzESjMzd7yxzHHSk7Emgj/niwr4EodTvBcQyusEE/XtCLrdeeWjdfBxBAh3yAGTYigZ16aZnj6Zgf1fx7pVktGALIZp+9zxdZeyebb+KAA==

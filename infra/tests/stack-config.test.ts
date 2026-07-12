@@ -64,7 +64,9 @@ describe("static Pulumi stack configuration", () => {
   it("commits only safe foundation defaults", () => {
     const config = readStackConfig("foundation");
 
-    expect(config["windrun-ai:allowProjectDeletion"]).toBe(false);
+    expect([false, "false"]).toContain(
+      config["windrun-ai:allowProjectDeletion"],
+    );
     expect(config).not.toHaveProperty("windrun-ai:enablePulumiGithubOidc");
     expect(config).not.toHaveProperty("windrun-ai:pulumiOrganization");
   });
