@@ -1,0 +1,60 @@
+name: Deploy staging
+on:
+  push:
+    branches: [staging]
+permissions:
+  contents: read
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm ci:validate-contract
+      - run: pnpm ci:quality
+  deploy:
+    needs: quality
+    if: vars.PULUMI_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: windrun-staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/auth-cloud
+        with:
+          pulumi-organization: ${{ vars.PULUMI_ORGANIZATION }}
+          gcp-project-id: windrun-ai-staging-20260712
+          workload-identity-provider: ${{ vars.GCP_WIF_PROVIDER_STAGING }}
+          service-account: ${{ vars.GCP_SERVICE_ACCOUNT_STAGING }}
+      - uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          command: preview
+          stack-name: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/staging
+          work-dir: infra
+          config-map: |
+            windrun-ai:stackKind:
+              value: staging
+            windrun-ai:gitCommitSha:
+              value: ${{ github.sha }}
+      - id: up
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          command: up
+          stack-name: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/staging
+          work-dir: infra
+          config-map: |
+            windrun-ai:stackKind:
+              value: staging
+            windrun-ai:gitCommitSha:
+              value: ${{ github.sha }}
+      - run: node scripts/ci/smoke-test.mjs https://staging.app.windrun.ai/api/health --attempts 30 --delay-ms 10000
