@@ -15,7 +15,16 @@ function readJson(path, displayPath, errors) {
   }
 
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
+    const document = JSON.parse(readFileSync(path, 'utf8'))
+    if (
+      document === null ||
+      typeof document !== 'object' ||
+      Array.isArray(document)
+    ) {
+      errors.push(`${displayPath} must contain a JSON object`)
+      return undefined
+    }
+    return document
   } catch {
     errors.push(`${displayPath} must contain valid JSON`)
     return undefined

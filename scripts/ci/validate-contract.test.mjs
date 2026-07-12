@@ -165,6 +165,40 @@ test('reports missing Pulumi delivery dependencies', () => {
   }
 })
 
+const invalidJsonDocuments = [
+  ['null', null],
+  ['a scalar', 0],
+  ['an array', []],
+]
+
+for (const [label, document] of invalidJsonDocuments) {
+  test(`rejects ${label} as the root package document`, () => {
+    const root = createFixture()
+
+    try {
+      writeJson(join(root, 'package.json'), document)
+      assert.deepEqual(validateContract(root), [
+        'package.json must contain a JSON object',
+      ])
+    } finally {
+      removeFixture(root)
+    }
+  })
+
+  test(`rejects ${label} as the infra package document`, () => {
+    const root = createFixture()
+
+    try {
+      writeJson(join(root, 'infra', 'package.json'), document)
+      assert.deepEqual(validateContract(root), [
+        'infra/package.json must contain a JSON object',
+      ])
+    } finally {
+      removeFixture(root)
+    }
+  })
+}
+
 test('prints the success contract and exits zero for a valid root', () => {
   const root = createFixture()
 
