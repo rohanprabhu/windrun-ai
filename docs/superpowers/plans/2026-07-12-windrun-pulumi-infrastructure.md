@@ -710,8 +710,10 @@ Assert:
 - Preview uses only the staging project/provider/repository/runtime account.
 - Docker context defaults to repository root `..` from `infra/`, so the build can access the root `pnpm-lock.yaml`; Dockerfile defaults to `../windrun-ai/Dockerfile`. An explicit absolute `sourceRoot` selects an application-only checkout for previews while the Pulumi program continues to run from trusted `main` code.
 - Docker Build has `push:true`, a tag containing service name plus full SHA, and produces the digest-qualified reference consumed by Cloud Run.
+- Docker Build sets `buildOnPreview:false`, `platforms:[linux/amd64]`, and `retainOnDelete:true`; retained tags are governed by the Pulumi-managed repository cleanup policy so destroy never depends on an expired registry token.
 - Cloud Run v2 ingress is `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER`.
 - Cloud Run v2 `gcp.cloudrunv2.Service.invokerIamDisabled` is `true` for Google-managed public invocation without a separate public IAM grant.
+- Cloud Run v2 sets `deletionProtection:false` so preview and environment teardown can succeed.
 - Container port is 8080.
 - Runtime metadata contains exactly `APP_ENVIRONMENT`, `GCP_PROJECT_ID`, `GOOGLE_CLOUD_REGION`, `GIT_COMMIT_SHA`, `PULUMI_STACK`, and `NEXT_PUBLIC_CANONICAL_HOST`.
 - No application/preview stack creates any Cloud Run IAM binding, member, or policy resource.
@@ -725,7 +727,7 @@ Expected: FAIL because `createAppStack` is missing.
 
 - [ ] **Step 3: Implement immutable image build and Cloud Run**
 
-Call `gcp.organizations.getClientConfigOutput({}, { provider })`; wrap its access token with `pulumi.secret`; authenticate Docker Build to `${REGION}-docker.pkg.dev` with username `oauth2accesstoken`; use build context `sourceRoot ?? ".."` and Dockerfile `${sourceRoot}/windrun-ai/Dockerfile` or the default `../windrun-ai/Dockerfile`; set `push:true`; and pass `image.ref` to Cloud Run. Accept an explicit source root only as a local execution input, never as Pulumi config or a stack output. Set `APP_ENVIRONMENT` to `production`, `staging`, or `preview`; `PULUMI_STACK` to the actual Pulumi stack name; and `NEXT_PUBLIC_CANONICAL_HOST` to `app.windrun.ai`, `staging.app.windrun.ai`, or `${serviceName}.staging.app.windrun.ai` respectively. On the `gcp.cloudrunv2.Service`, set ingress to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` and `invokerIamDisabled: true`; do not create separate Cloud Run IAM resources. A failed build must prevent service registration.
+Call `gcp.organizations.getClientConfigOutput({ provider })`; wrap its access token with `pulumi.secret`; authenticate Docker Build to `${REGION}-docker.pkg.dev` with username `oauth2accesstoken`; use build context `sourceRoot ?? ".."` and Dockerfile `${sourceRoot}/windrun-ai/Dockerfile` or the default `../windrun-ai/Dockerfile`; set `push:true`, `buildOnPreview:false`, and `platforms:[dockerBuild.Platform.Linux_amd64]`; pass `image.ref` to Cloud Run. Set `retainOnDelete:true` on the image because Docker Build delete would otherwise reuse an expired OAuth token; Artifact Registry cleanup policies own eventual tag removal. Require an absolute `sourceRoot` for previews, reject it for static stacks, validate exact fixed/`pr-N` service names, and accept the root only as a local execution input—never Pulumi config, a build arg, runtime metadata, or a stack output. Set `APP_ENVIRONMENT` to `production`, `staging`, or `preview`; `PULUMI_STACK` to the actual Pulumi stack name; and `NEXT_PUBLIC_CANONICAL_HOST` to `app.windrun.ai`, `staging.app.windrun.ai`, or `${serviceName}.staging.app.windrun.ai` respectively. On the `gcp.cloudrunv2.Service`, set ingress to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER`, `invokerIamDisabled:true`, and `deletionProtection:false`; do not create separate Cloud Run IAM resources. A failed build must prevent service registration.
 
 - [ ] **Step 4: Run focused tests and typecheck**
 

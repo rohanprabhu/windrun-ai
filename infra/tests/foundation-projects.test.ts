@@ -180,7 +180,43 @@ describe("isolated GCP project factory", () => {
         format: "DOCKER",
         mode: "STANDARD_REPOSITORY",
         dockerConfig: { immutableTags: false },
+        cleanupPolicyDryRun: false,
       });
+      const expectedStaticPolicies = [
+        {
+          id: `delete-old-${logicalName}`,
+          action: "DELETE",
+          condition: {
+            tagState: "ANY",
+            packageNamePrefixes: [logicalName],
+            olderThan: "90d",
+          },
+        },
+        {
+          id: `keep-recent-${logicalName}`,
+          action: "KEEP",
+          mostRecentVersions: {
+            packageNamePrefixes: [logicalName],
+            keepCount: 10,
+          },
+        },
+      ];
+      expect(repository?.inputs.cleanupPolicies).toEqual(
+        logicalName === "staging"
+          ? [
+              {
+                id: "delete-old-previews",
+                action: "DELETE",
+                condition: {
+                  tagState: "ANY",
+                  packageNamePrefixes: ["pr-"],
+                  olderThan: "30d",
+                },
+              },
+              ...expectedStaticPolicies,
+            ]
+          : expectedStaticPolicies,
+      );
       expect(repository?.dependencies).toContain(
         mockUrn(
           "gcp:projects/service:Service",

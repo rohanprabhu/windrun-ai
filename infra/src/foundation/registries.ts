@@ -9,6 +9,46 @@ export interface RegistryResources {
   stagingRepository: gcp.artifactregistry.Repository;
 }
 
+function repositoryCleanupPolicies(
+  logicalName: "production" | "staging",
+): gcp.types.input.artifactregistry.RepositoryCleanupPolicy[] {
+  const staticPolicies: gcp.types.input.artifactregistry.RepositoryCleanupPolicy[] =
+    [
+      {
+        id: `delete-old-${logicalName}`,
+        action: "DELETE",
+        condition: {
+          tagState: "ANY",
+          packageNamePrefixes: [logicalName],
+          olderThan: "90d",
+        },
+      },
+      {
+        id: `keep-recent-${logicalName}`,
+        action: "KEEP",
+        mostRecentVersions: {
+          packageNamePrefixes: [logicalName],
+          keepCount: 10,
+        },
+      },
+    ];
+
+  if (logicalName === "production") return staticPolicies;
+
+  return [
+    {
+      id: "delete-old-previews",
+      action: "DELETE",
+      condition: {
+        tagState: "ANY",
+        packageNamePrefixes: ["pr-"],
+        olderThan: "30d",
+      },
+    },
+    ...staticPolicies,
+  ];
+}
+
 function createRepository(
   logicalName: "production" | "staging",
   bundle: ProjectBundle,
@@ -23,6 +63,8 @@ function createRepository(
       mode: "STANDARD_REPOSITORY",
       description: `Windrun ${logicalName} Cloud Run images`,
       dockerConfig: { immutableTags: false },
+      cleanupPolicyDryRun: false,
+      cleanupPolicies: repositoryCleanupPolicies(logicalName),
     },
     {
       provider: bundle.provider,

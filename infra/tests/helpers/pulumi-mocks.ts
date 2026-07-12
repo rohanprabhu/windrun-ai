@@ -21,6 +21,8 @@ export interface CapturedResource {
   inputs: Record<string, unknown>;
   provider?: string;
   dependencies: string[];
+  protect?: boolean;
+  retainOnDelete?: boolean;
 }
 
 export const capturedResources: CapturedResource[] = [];
@@ -37,6 +39,8 @@ let activeDigitalOceanRecords: Array<{
   tag?: string;
 }> = [];
 const pendingDependencies = new Map<string, string[]>();
+const pendingProtect = new Map<string, boolean>();
+const pendingRetainOnDelete = new Map<string, boolean>();
 const patchKey = Symbol.for("windrun-ai:pulumi-mock-dependencies");
 
 type PatchedMockMonitor = typeof MockMonitor.prototype & {
@@ -52,12 +56,22 @@ if (!monitorPrototype[patchKey]) {
       getType(): string;
       getName(): string;
       getDependenciesList?(): string[];
+      getProtect?(): boolean | undefined;
+      getRetainondelete?(): boolean | undefined;
     },
     callback: Parameters<typeof originalRegisterResource>[1],
   ) {
     pendingDependencies.set(
       `${request.getType()}::${request.getName()}`,
       request.getDependenciesList?.() ?? [],
+    );
+    pendingProtect.set(
+      `${request.getType()}::${request.getName()}`,
+      request.getProtect?.() ?? false,
+    );
+    pendingRetainOnDelete.set(
+      `${request.getType()}::${request.getName()}`,
+      request.getRetainondelete?.() ?? false,
     );
     return originalRegisterResource.call(this, request, callback);
   } as typeof originalRegisterResource;
@@ -131,9 +145,10 @@ function resourceState(args: MockResourceArgs) {
           : MOCK_STAGING_IP,
       };
     case "docker-build:index:Image":
+      const [tag] = state.tags as string[];
       return {
         ...state,
-        ref: "asia-south1-docker.pkg.dev/mock/app/image@sha256:mockdigest",
+        ref: `${tag}@sha256:mockdigest`,
         digest: "sha256:mockdigest",
       };
     case "gcp:cloudrunv2/service:Service":
@@ -177,6 +192,8 @@ export async function setWindrunMocks(
   capturedResources.length = 0;
   capturedCalls.length = 0;
   pendingDependencies.clear();
+  pendingProtect.clear();
+  pendingRetainOnDelete.clear();
 
   await pulumi.runtime.setMocks(
     {
@@ -188,8 +205,12 @@ export async function setWindrunMocks(
           inputs: args.inputs,
           provider: args.provider || undefined,
           dependencies: pendingDependencies.get(key) ?? [],
+          protect: pendingProtect.get(key) ?? false,
+          retainOnDelete: pendingRetainOnDelete.get(key) ?? false,
         });
         pendingDependencies.delete(key);
+        pendingProtect.delete(key);
+        pendingRetainOnDelete.delete(key);
 
         return {
           id: args.custom ? `${args.name}-id` : undefined,

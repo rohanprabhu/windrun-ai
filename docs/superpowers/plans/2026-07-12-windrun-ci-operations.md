@@ -572,7 +572,6 @@ deploy-preview:
   with:
     pr-number: ${{ github.event.pull_request.number }}
     merge-sha: ${{ github.event.pull_request.merge_commit_sha }}
-    head-sha: ${{ github.event.pull_request.head.sha }}
     preview-url: https://pr-${{ github.event.pull_request.number }}.staging.app.windrun.ai
 ```
 
@@ -612,15 +611,12 @@ on:
       merge-sha:
         type: string
         required: true
-      head-sha:
-        type: string
-        required: true
       preview-url:
         type: string
         required: true
 ```
 
-Its sole job must recheck `github.event_name == 'pull_request'`, `github.event.action` is one of `opened|reopened|synchronize`, `github.event.pull_request.base.ref == 'main'`, `github.event.pull_request.base.repo.id == github.event.repository.id`, immutable `github.event.pull_request.head.repo.id == github.event.repository.id`, `github.event.pull_request.head.repo.full_name == github.repository`, `inputs.pr-number == github.event.pull_request.number`, `inputs.merge-sha == github.event.pull_request.merge_commit_sha`, `inputs.head-sha == github.event.pull_request.head.sha`, and `inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)` before any step. It owns `environment: preview` and:
+Its sole job must recheck `github.event_name == 'pull_request'`, `github.event.action` is one of `opened|reopened|synchronize`, `github.event.pull_request.base.ref == 'main'`, `github.event.pull_request.base.repo.id == github.event.repository.id`, immutable `github.event.pull_request.head.repo.id == github.event.repository.id`, `github.event.pull_request.head.repo.full_name == github.repository`, `inputs.pr-number == github.event.pull_request.number`, `inputs.merge-sha == github.event.pull_request.merge_commit_sha`, and `inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)` before any step. It owns `environment: preview` and:
 
 ```yaml
 concurrency:
@@ -639,7 +635,7 @@ config-map: |
   windrun-ai:pullRequestNumber:
     value: ${{ inputs.pr-number }}
   windrun-ai:gitCommitSha:
-    value: ${{ inputs.head-sha }}
+    value: ${{ inputs.merge-sha }}
 ```
 
 It smoke-tests `${{ inputs.preview-url }}/api/health` and calls `upsert-preview-comment.mjs` with `github.token`. An `if: always()` comment passes `ready` only when up and smoke succeeded; otherwise it passes `failed`. No long-lived secret is declared or inherited.
