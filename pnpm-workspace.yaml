@@ -2,5 +2,7 @@ packages:
   - windrun-ai
   - infra
 allowBuilds:
+  '@pulumi/docker-build@0.0.20': true
+  protobufjs@7.6.5: true
   sharp@0.34.5: true
   unrs-resolver@1.12.2: true

@@ -1,0 +1,7 @@
+name: windrun-ai
+runtime:
+  name: nodejs
+  options:
+    packagemanager: pnpm
+main: src/index.ts
+description: Windrun Cloud Run platform infrastructure
