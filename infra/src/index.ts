@@ -2,7 +2,10 @@ import * as pulumi from "@pulumi/pulumi";
 
 import { parseStackContext } from "./config";
 import { SERVICE_NAMES } from "./constants";
-import { createDeliveryStack } from "./delivery";
+import {
+  assertDeliveryCredentials,
+  createDeliveryStack,
+} from "./delivery";
 import { createFoundationStack } from "./foundation";
 import { getFoundationOutputs } from "./foundation-outputs";
 import { createProjectProvider } from "./providers";
@@ -52,14 +55,7 @@ function run() {
         config.getBoolean("enablePulumiGithubOidc") ?? false;
       const pulumiOrganization = config.require("pulumiOrganization");
 
-      if (!process.env.GITHUB_TOKEN) {
-        throw new Error("GITHUB_TOKEN is required for the delivery stack");
-      }
-      if (enablePulumiGithubOidc && !process.env.PULUMI_ACCESS_TOKEN) {
-        throw new Error(
-          "PULUMI_ACCESS_TOKEN is required when Pulumi GitHub OIDC is enabled",
-        );
-      }
+      assertDeliveryCredentials(enablePulumiGithubOidc);
 
       const foundation = getFoundationOutputs();
       return createDeliveryStack({

@@ -95,38 +95,132 @@ const expectedVariableValues = {
     foundationValues.foundationDeployServiceAccount,
 } as const;
 
-async function createFixture(enablePulumiGithubOidc: boolean) {
-  await setWindrunMocks("delivery");
-  const args: DeliveryStackArgs = {
+function deliveryArgs(enablePulumiGithubOidc: boolean): DeliveryStackArgs {
+  return {
     pulumiOrganization,
     enablePulumiGithubOidc,
     foundation,
   };
+}
+
+function withCredentialEnvironment<T>(
+  credentials: {
+    githubToken?: string;
+    pulumiAccessToken?: string;
+  },
+  run: () => T,
+): T {
   const previousGithubToken = process.env.GITHUB_TOKEN;
   const previousPulumiAccessToken = process.env.PULUMI_ACCESS_TOKEN;
-  process.env.GITHUB_TOKEN = githubToken;
-  process.env.PULUMI_ACCESS_TOKEN = pulumiAccessToken;
-  const outputs = (() => {
-    try {
-      return createDeliveryStack(args);
-    } finally {
-      if (previousGithubToken === undefined) {
-        delete process.env.GITHUB_TOKEN;
-      } else {
-        process.env.GITHUB_TOKEN = previousGithubToken;
-      }
-      if (previousPulumiAccessToken === undefined) {
-        delete process.env.PULUMI_ACCESS_TOKEN;
-      } else {
-        process.env.PULUMI_ACCESS_TOKEN = previousPulumiAccessToken;
-      }
+  if (credentials.githubToken === undefined) {
+    delete process.env.GITHUB_TOKEN;
+  } else {
+    process.env.GITHUB_TOKEN = credentials.githubToken;
+  }
+  if (credentials.pulumiAccessToken === undefined) {
+    delete process.env.PULUMI_ACCESS_TOKEN;
+  } else {
+    process.env.PULUMI_ACCESS_TOKEN = credentials.pulumiAccessToken;
+  }
+
+  try {
+    return run();
+  } finally {
+    if (previousGithubToken === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = previousGithubToken;
     }
-  })();
+    if (previousPulumiAccessToken === undefined) {
+      delete process.env.PULUMI_ACCESS_TOKEN;
+    } else {
+      process.env.PULUMI_ACCESS_TOKEN = previousPulumiAccessToken;
+    }
+  }
+}
+
+async function createFixture(enablePulumiGithubOidc: boolean) {
+  await setWindrunMocks("delivery");
+  const outputs = withCredentialEnvironment(
+    { githubToken, pulumiAccessToken },
+    () => createDeliveryStack(deliveryArgs(enablePulumiGithubOidc)),
+  );
   const ciEnabled = await resolveOutput(outputs.ciEnabled);
   return { outputs, ciEnabled };
 }
 
 describe("local-only delivery stack", () => {
+  it("fails closed at the factory boundary without GITHUB_TOKEN", async () => {
+    await setWindrunMocks("delivery");
+
+    expect(() =>
+      withCredentialEnvironment({ pulumiAccessToken }, () =>
+        createDeliveryStack(deliveryArgs(true)),
+      ),
+    ).toThrow("GITHUB_TOKEN is required for the delivery stack");
+    expect(capturedResources).toEqual([]);
+  });
+
+  it("fails closed at the factory boundary without enabled OIDC credentials", async () => {
+    await setWindrunMocks("delivery");
+
+    expect(() =>
+      withCredentialEnvironment({ githubToken }, () =>
+        createDeliveryStack(deliveryArgs(true)),
+      ),
+    ).toThrow(
+      "PULUMI_ACCESS_TOKEN is required when Pulumi GitHub OIDC is enabled",
+    );
+    expect(capturedResources).toEqual([]);
+  });
+
+  it("allows disabled OIDC without PULUMI_ACCESS_TOKEN", async () => {
+    await setWindrunMocks("delivery");
+
+    const outputs = withCredentialEnvironment({ githubToken }, () =>
+      createDeliveryStack(deliveryArgs(false)),
+    );
+    expect(await resolveOutput(outputs.ciEnabled)).toBe(false);
+    expect(resourcesOfType("pulumi:providers:github")).toHaveLength(1);
+    expect(resourcesOfType("pulumi:providers:pulumiservice")).toEqual([]);
+  });
+
+  it("restores credential sentinels before a successful factory call returns", async () => {
+    await setWindrunMocks("delivery");
+
+    const outputs = withCredentialEnvironment(
+      { githubToken, pulumiAccessToken },
+      () => {
+        const result = createDeliveryStack(deliveryArgs(true));
+        expect(process.env.GITHUB_TOKEN).toBe(githubToken);
+        expect(process.env.PULUMI_ACCESS_TOKEN).toBe(pulumiAccessToken);
+        return result;
+      },
+    );
+    expect(await resolveOutput(outputs.ciEnabled)).toBe(true);
+  });
+
+  it("restores credential sentinels when resource construction throws", async () => {
+    await setWindrunMocks("delivery");
+    const constructionError = "delivery construction sentinel";
+    const throwingArgs = {
+      get pulumiOrganization(): string {
+        throw new Error(constructionError);
+      },
+      enablePulumiGithubOidc: true,
+      foundation,
+    } as DeliveryStackArgs;
+
+    withCredentialEnvironment({ githubToken, pulumiAccessToken }, () => {
+      expect(() => createDeliveryStack(throwingArgs)).toThrow(
+        constructionError,
+      );
+      expect(process.env.GITHUB_TOKEN).toBe(githubToken);
+      expect(process.env.PULUMI_ACCESS_TOKEN).toBe(pulumiAccessToken);
+    });
+    expect(capturedResources).toEqual([]);
+  });
+
   it("creates exact GitHub environments and custom deployment policies", async () => {
     await createFixture(true);
 

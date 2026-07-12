@@ -17,6 +17,19 @@ export interface DeliveryStackOutputs {
   ciEnabled: pulumi.Output<boolean>;
 }
 
+export function assertDeliveryCredentials(
+  enablePulumiGithubOidc: boolean,
+): void {
+  if (!process.env.GITHUB_TOKEN) {
+    throw new Error("GITHUB_TOKEN is required for the delivery stack");
+  }
+  if (enablePulumiGithubOidc && !process.env.PULUMI_ACCESS_TOKEN) {
+    throw new Error(
+      "PULUMI_ACCESS_TOKEN is required when Pulumi GitHub OIDC is enabled",
+    );
+  }
+}
+
 function withoutCredentialProviderInputs<T>(create: () => T): T {
   const githubToken = process.env.GITHUB_TOKEN;
   const pulumiAccessToken = process.env.PULUMI_ACCESS_TOKEN;
@@ -78,5 +91,6 @@ function createDeliveryResources(
 export function createDeliveryStack(
   args: DeliveryStackArgs,
 ): DeliveryStackOutputs {
+  assertDeliveryCredentials(args.enablePulumiGithubOidc);
   return withoutCredentialProviderInputs(() => createDeliveryResources(args));
 }
