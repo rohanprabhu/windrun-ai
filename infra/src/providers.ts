@@ -9,8 +9,20 @@ export interface ProjectProviders {
   production: gcp.Provider;
 }
 
+export type ProjectLogicalName = "shared" | "staging" | "production";
+
 export function createBootstrapProvider() {
   return new gcp.Provider("gcp-bootstrap", {});
+}
+
+export function createProjectProvider(
+  logicalName: ProjectLogicalName,
+  projectId: pulumi.Input<string>,
+) {
+  return new gcp.Provider(`gcp-${logicalName}`, {
+    project: projectId,
+    region: REGION,
+  });
 }
 
 export function createProjectProviders(projectIds: {
@@ -19,17 +31,8 @@ export function createProjectProviders(projectIds: {
   production: pulumi.Input<string>;
 }): ProjectProviders {
   return {
-    shared: new gcp.Provider("gcp-shared", {
-      project: projectIds.shared,
-      region: REGION,
-    }),
-    staging: new gcp.Provider("gcp-staging", {
-      project: projectIds.staging,
-      region: REGION,
-    }),
-    production: new gcp.Provider("gcp-production", {
-      project: projectIds.production,
-      region: REGION,
-    }),
+    shared: createProjectProvider("shared", projectIds.shared),
+    staging: createProjectProvider("staging", projectIds.staging),
+    production: createProjectProvider("production", projectIds.production),
   };
 }
