@@ -1077,7 +1077,7 @@ git commit -m "feat(infra): add static Pulumi stack contracts"
 
 - [ ] **Step 1: Write the failing script test**
 
-Read the script as text and assert `set -euo pipefail`, both exact `security` commands with `-a windrun-ai`, `pulumi config set --secret windrun-ai:digitalOceanToken`, ciphertext-presence validation before deletion, `unset TOKEN`, and absence of token-printing commands, `gcloud`, `doctl`, and `gh`.
+Assert `set -euo pipefail`, both exact `security` commands with `-a windrun-ai`, `pulumi config set --secret windrun-ai:digitalOceanToken`, exact-path non-empty `secure` ciphertext validation before deletion, `unset TOKEN`, and absence of token-printing commands, `gcloud`, `doctl`, and `gh`. Exercise the validator with valid encrypted YAML plus plaintext, empty, whitespace-only, stale, commented, and malformed fixtures; it must emit no output.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1091,10 +1091,36 @@ Expected: FAIL because the script does not exist.
 #!/usr/bin/env bash
 set -euo pipefail
 
+validate_encrypted_config() {
+  node - "$1" <<'NODE'
+const { readFileSync } = require("node:fs");
+
+let document;
+try {
+  const { parse } = require("yaml");
+  document = parse(readFileSync(process.argv[2], "utf8"));
+} catch {
+  process.exit(1);
+}
+
+const ciphertext =
+  document?.config?.["windrun-ai:digitalOceanToken"]?.secure;
+process.exit(
+  typeof ciphertext === "string" && ciphertext.trim().length > 0 ? 0 : 1,
+);
+NODE
+}
+
 cd "$(dirname "$0")/.."
+if [[ "${1:-}" == "--validate-config" ]]; then
+  [[ $# -eq 2 ]]
+  validate_encrypted_config "$2"
+  exit
+fi
+
 TOKEN="$(security find-generic-password -a windrun-ai -s com.windrun.pulumi.digitalocean -w)"
 pulumi config set --stack foundation --secret windrun-ai:digitalOceanToken "$TOKEN"
-rg -q 'windrun-ai:digitalOceanToken:' Pulumi.foundation.yaml
+validate_encrypted_config Pulumi.foundation.yaml
 security delete-generic-password -a windrun-ai -s com.windrun.pulumi.digitalocean
 unset TOKEN
 ```
