@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="windrun-gradient" x1="8" y1="12" x2="55" y2="51" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8F4E9"/>
+      <stop offset="0.48" stop-color="#8EA6FF"/>
+      <stop offset="1" stop-color="#5CF2D6"/>
+    </linearGradient>
+  </defs>
+  <path d="M8 18C18 12 27 12 36 18C43 22.5 49 22.8 56 19" stroke="url(#windrun-gradient)" stroke-width="5" stroke-linecap="round"/>
+  <path d="M11 31C20 25.5 28 25.5 36 31C42.5 35.3 48.5 35.6 54 32.5" stroke="url(#windrun-gradient)" stroke-width="5" stroke-linecap="round" opacity="0.86"/>
+  <path d="M16 44C23 40.2 30 40.3 36.5 44.3C41 47 45.5 47.3 49 45.5" stroke="url(#windrun-gradient)" stroke-width="5" stroke-linecap="round" opacity="0.68"/>
+</svg>

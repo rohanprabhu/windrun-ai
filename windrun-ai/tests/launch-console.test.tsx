@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -14,6 +14,17 @@ const stagingStatus: DeploymentStatus = {
   canonicalHost: "staging.app.windrun.ai",
   service: "staging",
   revision: "staging-00001",
+};
+
+const localStatus: DeploymentStatus = {
+  environment: "local",
+  projectId: "local-project",
+  region: "local",
+  commitSha: "local",
+  stack: "local",
+  canonicalHost: "localhost:3000",
+  service: "windrun-local",
+  revision: "local",
 };
 
 beforeEach(() => {
@@ -64,4 +75,18 @@ it("reports a failed ping through an accessible live region", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "Could not reach this deployment",
   );
+});
+
+it("offers an accessible bounded wind control", () => {
+  render(<LaunchConsole initialStatus={localStatus} />);
+  const control = screen.getByRole("slider", { name: "Wind strength" });
+
+  expect(control).toHaveAttribute("min", "0.4");
+  expect(control).toHaveAttribute("max", "2");
+  expect(control).toHaveAttribute("step", "0.1");
+
+  fireEvent.change(control, { target: { value: "1.6" } });
+
+  expect(control).toHaveValue("1.6");
+  expect(screen.getByText("1.6×")).toBeInTheDocument();
 });
