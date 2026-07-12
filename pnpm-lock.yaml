@@ -6,7 +6,11 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      yaml:
+        specifier: ^2.8.1
+        version: 2.9.0
 
   infra:
     dependencies:

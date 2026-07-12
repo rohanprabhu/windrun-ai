@@ -8,8 +8,15 @@
     "build": "pnpm -r --filter=!windrun-ai-platform --if-present build",
     "test": "pnpm -r --filter=!windrun-ai-platform --if-present test",
     "test:app": "pnpm --filter @windrun/app test",
+    "test:infra": "pnpm --filter @windrun/infra test",
+    "test:ci": "node --test scripts/ci/*.test.mjs scripts/ops/*.test.mjs",
     "smoke:container": "bash scripts/smoke-container.sh",
     "lint": "pnpm -r --filter=!windrun-ai-platform --if-present lint",
-    "typecheck": "pnpm -r --filter=!windrun-ai-platform --if-present typecheck"
+    "typecheck": "pnpm -r --filter=!windrun-ai-platform --if-present typecheck",
+    "ci:quality": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:infra && pnpm build",
+    "ci:validate-contract": "node scripts/ci/validate-contract.mjs"
+  },
+  "devDependencies": {
+    "yaml": "^2.8.1"
   }
 }

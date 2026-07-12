@@ -1,0 +1,27 @@
+name: Authenticate Windrun Cloud
+description: Exchange GitHub OIDC for short-lived Pulumi and Google credentials
+inputs:
+  pulumi-organization:
+    required: true
+  gcp-project-id:
+    required: true
+  workload-identity-provider:
+    required: true
+  service-account:
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: pulumi/auth-actions@141415910c3beb54e03b48e9057c204c97b956f2 # v2.1.0
+      with:
+        organization: ${{ inputs.pulumi-organization }}
+        requested-token-type: urn:pulumi:token-type:access_token:personal
+        scope: user:${{ inputs.pulumi-organization }}
+        token-expiration: 3600
+    - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        project_id: ${{ inputs.gcp-project-id }}
+        workload_identity_provider: ${{ inputs.workload-identity-provider }}
+        service_account: ${{ inputs.service-account }}
+        create_credentials_file: true
+        export_environment_variables: true
