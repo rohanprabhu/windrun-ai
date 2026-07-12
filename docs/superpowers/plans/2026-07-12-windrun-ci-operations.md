@@ -770,7 +770,7 @@ Expected: FAIL because the enablement module is absent.
 
 - [ ] **Step 3: Specify exact Pulumi issuer policies**
 
-The `delivery` stack must register `https://token.actions.githubusercontent.com` with a 3600-second maximum and deny-by-default policy. Every allow rule requires:
+The `delivery` stack must register `https://token.actions.githubusercontent.com` with a 3600-second maximum and deny-by-default policy. Every allow rule creates a personal-token policy whose `userLogin` is the raw Pulumi login returned by `pulumi whoami` (for example `alice`, never `user:alice`) and requires:
 
 ```text
 aud = urn:pulumi:org:$PULUMI_ORGANIZATION
@@ -779,17 +779,21 @@ repository_id = 1095528250
 repository_owner_id = 136263
 ```
 
-Add distinct rules for these exact environment subjects, events, refs, and trusted workflow claims:
+GitHub's legacy and immutable-ID subject prefixes are both valid for this existing repository. Do not hard-code `repo:rohanprabhu/windrun-ai`. Each rule must instead combine the exact numeric claims above with `sub = repo:*:environment:<environment>` and an exact `environment` claim. The suffix pattern accepts either documented prefix without trusting another repository because both immutable numeric claims are mandatory.
+
+Add distinct rules for these exact environments, events, refs, caller workflows, and trusted reusable-workflow claims:
 
 ```text
-repo:rohanprabhu/windrun-ai:environment:foundation       workflow_dispatch / refs/heads/main / manage-foundation.yml
-repo:rohanprabhu/windrun-ai:environment:production       push / refs/heads/main / deploy-production.yml
-repo:rohanprabhu/windrun-ai:environment:production-edge  workflow_dispatch / refs/heads/main / manage-edge.yml
-repo:rohanprabhu/windrun-ai:environment:staging          push / refs/heads/staging / deploy-staging.yml
-repo:rohanprabhu/windrun-ai:environment:staging-edge     workflow_dispatch / refs/heads/main / manage-edge.yml
-repo:rohanprabhu/windrun-ai:environment:preview          pull_request / refs/pull/*/merge / job_workflow_ref rohanprabhu/windrun-ai/.github/workflows/_preview-deploy.yml@refs/heads/main
-repo:rohanprabhu/windrun-ai:environment:preview          pull_request / refs/pull/*/merge / job_workflow_ref rohanprabhu/windrun-ai/.github/workflows/_preview-destroy.yml@refs/heads/main
+foundation       workflow_dispatch / refs/heads/main    / manage-foundation.yml
+production       push              / refs/heads/main    / deploy-production.yml
+production-edge  workflow_dispatch / refs/heads/main    / manage-edge.yml
+staging          push              / refs/heads/staging / deploy-staging.yml
+staging-edge     workflow_dispatch / refs/heads/main    / manage-edge.yml
+preview          pull_request      / refs/pull/*/merge  / pull-request.yml / job_workflow_ref rohanprabhu/windrun-ai/.github/workflows/_preview-deploy.yml@refs/heads/main
+preview          pull_request      / refs/pull/*/merge  / pull-request.yml / job_workflow_ref rohanprabhu/windrun-ai/.github/workflows/_preview-destroy.yml@refs/heads/main
 ```
+
+The token exchange still uses the prefixed action scope `user:<LOGIN>`; that value is intentionally different from the issuer policy's raw `userLogin`.
 
 In `infra/src/delivery/github.ts`, create the environment and branch-deployment-policy resources with this exact contract:
 
@@ -806,20 +810,22 @@ Every environment/policy and Actions variable uses the explicit `github.Provider
 
 - [ ] **Step 4: Specify exact GCP claim mapping and conditions**
 
-Each provider maps:
+Every provider uses this common mapping. Mapping the numeric repository ID as `google.subject` keeps it immutable, below Google's 127-byte subject limit, and independent of GitHub's legacy versus post-2026-07-15 subject formats:
 
 ```text
-google.subject=assertion.sub
+google.subject=assertion.repository_id
 attribute.repository=assertion.repository
 attribute.repository_id=assertion.repository_id
 attribute.repository_owner_id=assertion.repository_owner_id
 attribute.event_name=assertion.event_name
 attribute.ref=assertion.ref
 attribute.workflow_ref=assertion.workflow_ref
-attribute.job_workflow_ref=assertion.job_workflow_ref
+attribute.environment=assertion.environment
 ```
 
-All conditions require numeric repository and owner IDs. Foundation accepts only `manage-foundation.yml` on `main`. Production accepts only `deploy-production.yml` on `main`. Production-edge accepts only `manage-edge.yml` on `main`. Staging accepts only `deploy-staging.yml` on `staging`. Staging-edge accepts only `manage-edge.yml` on `main`. Preview requires `event_name == 'pull_request'`, `ref` matching `refs/pull/*/merge`, and `assertion.job_workflow_ref` equal to one of the two exact main-branch reusable refs; it must not trust the caller's `workflow_ref` or a wildcard reusable ref. Production-edge and staging-edge remain separate providers and service accounts with roles only in their own projects.
+Only the preview provider extends the mapping with `attribute.job_workflow_ref=assertion.job_workflow_ref`; direct jobs are not guaranteed to receive that claim. All provider conditions require exact numeric repository and owner IDs plus the expected `environment`, `event_name`, `ref`, and `workflow_ref`. Foundation accepts only `manage-foundation.yml` on `main`. Production accepts only `deploy-production.yml` on `main`. Production-edge accepts only `manage-edge.yml` on `main`. Staging accepts only `deploy-staging.yml` on `staging`. Staging-edge accepts only `manage-edge.yml` on `main`. Preview additionally requires `event_name == 'pull_request'`, a `refs/pull/*/merge` ref, the exact `pull-request.yml` caller, and `assertion.job_workflow_ref` equal to one of the two exact main-branch reusable refs; it must never accept a wildcard reusable ref. Production-edge and staging-edge remain separate providers and service accounts with roles only in their own projects.
+
+Each service-account impersonation member uses `principalSet://iam.googleapis.com/projects/<numeric-pool-project-number>/locations/global/workloadIdentityPools/<pool-id>/attribute.repository_id/1095528250`; a string project ID is invalid in that URI. GitHub `assertion.*` expressions belong only in the provider's CEL condition and must not be copied into project or service-account IAM binding conditions.
 
 - [ ] **Step 5: Implement post-claim enablement**
 

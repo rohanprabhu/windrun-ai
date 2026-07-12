@@ -600,19 +600,22 @@ export interface FederatedIdentity {
 }
 ```
 
-Use this exact attribute mapping:
+Use this exact common attribute mapping. Mapping the numeric repository ID as the Google subject keeps the value immutable, short, and independent of GitHub's legacy versus post-2026-07-15 immutable `sub` formats:
 
 ```ts
 export const GITHUB_ATTRIBUTE_MAPPING = {
-  "google.subject": "assertion.sub",
+  "google.subject": "assertion.repository_id",
   "attribute.repository": "assertion.repository",
   "attribute.repository_id": "assertion.repository_id",
   "attribute.repository_owner_id": "assertion.repository_owner_id",
   "attribute.ref": "assertion.ref",
   "attribute.event_name": "assertion.event_name",
-  "attribute.job_workflow_ref": "assertion.job_workflow_ref",
+  "attribute.workflow_ref": "assertion.workflow_ref",
+  "attribute.environment": "assertion.environment",
 } as const;
 ```
+
+Only the preview provider extends that mapping with `"attribute.job_workflow_ref": "assertion.job_workflow_ref"`; GitHub does not promise `job_workflow_ref` for direct, non-reusable jobs.
 
 Every provider condition includes:
 
@@ -624,14 +627,16 @@ assertion.repository == 'rohanprabhu/windrun-ai'
 
 Additional restrictions:
 
-- Production: `push` and `refs/heads/main`.
-- Staging: `push` and `refs/heads/staging`.
-- Preview: `pull_request` and the trusted reusable workflow pinned to `main`.
-- Edge/foundation: `workflow_dispatch` and `refs/heads/main`.
+- Production: environment `production`, `push`, `refs/heads/main`, and exact `deploy-production.yml` workflow ref.
+- Staging: environment `staging`, `push`, `refs/heads/staging`, and exact `deploy-staging.yml` workflow ref.
+- Preview: environment `preview`, `pull_request`, a `refs/pull/*/merge` ref, and either exact `_preview-deploy.yml` or `_preview-destroy.yml` `job_workflow_ref` pinned to `refs/heads/main`.
+- Production edge: environment `production-edge`, `workflow_dispatch`, `refs/heads/main`, and exact `manage-edge.yml` workflow ref.
+- Staging edge: environment `staging-edge`, `workflow_dispatch`, `refs/heads/main`, and exact `manage-edge.yml` workflow ref.
+- Foundation: environment `foundation`, `workflow_dispatch`, `refs/heads/main`, and exact `manage-foundation.yml` workflow ref.
 
 - [ ] **Step 1: Write failing identity tests**
 
-Assert six separate pools/providers/service accounts, immutable repository/owner checks, branch/event checks, `roles/iam.workloadIdentityUser`, and no service-account key resources.
+Assert six separate pools/providers/service accounts, numeric `google.subject`, immutable repository/owner checks, environment/branch/event/workflow checks, preview-only `job_workflow_ref` mapping, `roles/iam.workloadIdentityUser`, and no service-account key resources. Principal-set members must use the pool-owning project's numeric project number, never its string project ID.
 
 Assert permission boundaries:
 
@@ -648,7 +653,7 @@ Expected: FAIL because federation resources do not exist.
 
 - [ ] **Step 3: Implement GCP federation and IAM**
 
-Use issuer `https://token.actions.githubusercontent.com`. Each service account receives a principal-set binding scoped to its own pool and repository ID. Do not grant staging identities in production or production identities in staging.
+Use issuer `https://token.actions.githubusercontent.com`. Each service account receives a principal-set binding scoped to its own pool and repository ID using `principalSet://iam.googleapis.com/projects/<numeric-project-number>/locations/global/workloadIdentityPools/<pool-id>/attribute.repository_id/1095528250`. Do not grant staging identities in production or production identities in staging, and do not use GitHub `assertion.*` expressions in project/service-account IAM conditions; those claims exist only in the WIF provider CEL context.
 
 - [ ] **Step 4: Run tests and typecheck**
 
