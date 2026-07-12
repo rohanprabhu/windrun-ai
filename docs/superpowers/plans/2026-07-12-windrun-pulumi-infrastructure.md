@@ -910,8 +910,6 @@ git commit -m "feat(infra): dispatch typed Pulumi stack kinds"
 export interface DeliveryStackArgs {
   pulumiOrganization: string;
   enablePulumiGithubOidc: boolean;
-  githubToken: pulumi.Input<string>;
-  pulumiAccessToken?: pulumi.Input<string>;
   foundation: FoundationOutputs;
 }
 
@@ -968,7 +966,7 @@ Expected: FAIL because the delivery modules do not exist.
 
 - [ ] **Step 3: Implement explicit providers and GitHub resources**
 
-Read `GITHUB_TOKEN` from `process.env`, throw `GITHUB_TOKEN is required for the delivery stack` when absent, wrap it with `pulumi.secret`, and pass it to an explicit `github.Provider`. When `enablePulumiGithubOidc=true`, also read `PULUMI_ACCESS_TOKEN` from `process.env`, throw `PULUMI_ACCESS_TOKEN is required when Pulumi GitHub OIDC is enabled` when absent, wrap it with `pulumi.secret`, and pass it to an explicit `pulumiservice.Provider`. When disabled, create neither the Pulumi Service provider nor issuer. Do not put either token in Pulumi config, outputs, Actions variables, resource names, commits, or logs; do not invoke `gh`.
+Read `GITHUB_TOKEN` from `process.env` and throw `GITHUB_TOKEN is required for the delivery stack` when absent. When `enablePulumiGithubOidc=true`, also require `PULUMI_ACCESS_TOKEN` in `process.env`. Keep both tokens only in the child-process environment: the explicit GitHub provider sets only owner and `https://api.github.com/`, and the explicit Pulumi Service provider sets only `https://api.pulumi.com`, allowing each plugin to read its standard environment variable without persisting a token input in state. When disabled, create neither the Pulumi Service provider nor issuer. Do not put either token in Pulumi config, provider inputs, outputs, Actions variables, resource names, commits, or logs; do not invoke `gh`.
 
 - [ ] **Step 4: Implement environments, policies, and variables**
 

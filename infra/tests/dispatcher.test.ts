@@ -13,6 +13,8 @@ import {
 const organization = "mock-org";
 const commitSha = "b".repeat(40);
 const digitalOceanToken = "dispatcher-test-do-token";
+const githubToken = "dispatcher-test-github-token";
+const pulumiAccessToken = "dispatcher-test-pulumi-token";
 
 function wifProvider(
   projectNumber: string,
@@ -98,6 +100,8 @@ async function runProgram(args: {
   config: Record<string, string>;
   foundationOutputs?: Record<string, unknown>;
   sourceRoot?: string;
+  githubToken?: string;
+  pulumiAccessToken?: string;
 }) {
   await setWindrunMocks(args.stack, {
     organization,
@@ -113,10 +117,22 @@ async function runProgram(args: {
   vi.resetModules();
 
   const previousSourceRoot = process.env.WINDRUN_APP_SOURCE;
+  const previousGithubToken = process.env.GITHUB_TOKEN;
+  const previousPulumiAccessToken = process.env.PULUMI_ACCESS_TOKEN;
   if (args.sourceRoot === undefined) {
     delete process.env.WINDRUN_APP_SOURCE;
   } else {
     process.env.WINDRUN_APP_SOURCE = args.sourceRoot;
+  }
+  if (args.githubToken === undefined) {
+    delete process.env.GITHUB_TOKEN;
+  } else {
+    process.env.GITHUB_TOKEN = args.githubToken;
+  }
+  if (args.pulumiAccessToken === undefined) {
+    delete process.env.PULUMI_ACCESS_TOKEN;
+  } else {
+    process.env.PULUMI_ACCESS_TOKEN = args.pulumiAccessToken;
   }
 
   let outputs!: ProgramOutputs;
@@ -142,12 +158,77 @@ async function runProgram(args: {
     } else {
       process.env.WINDRUN_APP_SOURCE = previousSourceRoot;
     }
+    if (previousGithubToken === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = previousGithubToken;
+    }
+    if (previousPulumiAccessToken === undefined) {
+      delete process.env.PULUMI_ACCESS_TOKEN;
+    } else {
+      process.env.PULUMI_ACCESS_TOKEN = previousPulumiAccessToken;
+    }
+    await pulumi.runtime.disconnect().catch(() => undefined);
+  }
+}
+
+async function expectDeliveryCredentialError(args: {
+  enablePulumiGithubOidc: boolean;
+  githubToken?: string;
+  pulumiAccessToken?: string;
+  message: string;
+}) {
+  await setWindrunMocks("delivery", {
+    organization,
+    stackReferenceOutputs: foundationOutputFixture,
+  });
+  pulumi.runtime.setAllConfig(
+    {
+      "windrun-ai:stackKind": "delivery",
+      "windrun-ai:enablePulumiGithubOidc": String(
+        args.enablePulumiGithubOidc,
+      ),
+      "windrun-ai:pulumiOrganization": "windrun-pulumi-user",
+    },
+    [],
+  );
+  vi.resetModules();
+
+  const previousGithubToken = process.env.GITHUB_TOKEN;
+  const previousPulumiAccessToken = process.env.PULUMI_ACCESS_TOKEN;
+  if (args.githubToken === undefined) {
+    delete process.env.GITHUB_TOKEN;
+  } else {
+    process.env.GITHUB_TOKEN = args.githubToken;
+  }
+  if (args.pulumiAccessToken === undefined) {
+    delete process.env.PULUMI_ACCESS_TOKEN;
+  } else {
+    process.env.PULUMI_ACCESS_TOKEN = args.pulumiAccessToken;
+  }
+
+  try {
+    const run = await loadProgramRunner();
+    expect(() => run()).toThrow(args.message);
+  } finally {
+    if (previousGithubToken === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = previousGithubToken;
+    }
+    if (previousPulumiAccessToken === undefined) {
+      delete process.env.PULUMI_ACCESS_TOKEN;
+    } else {
+      process.env.PULUMI_ACCESS_TOKEN = previousPulumiAccessToken;
+    }
     await pulumi.runtime.disconnect().catch(() => undefined);
   }
 }
 
 afterEach(() => {
   delete process.env.WINDRUN_APP_SOURCE;
+  delete process.env.GITHUB_TOKEN;
+  delete process.env.PULUMI_ACCESS_TOKEN;
 });
 
 describe("Pulumi stack dispatcher", () => {
@@ -239,6 +320,80 @@ describe("Pulumi stack dispatcher", () => {
     expect(Object.values(secrets)).toEqual(
       Array(Object.keys(foundationOutputFixture).length).fill(false),
     );
+  });
+
+  it("dispatches delivery after loading foundation outputs and keeps credentials environment-only", async () => {
+    const { resolved } = await runProgram({
+      stack: "delivery",
+      config: {
+        "windrun-ai:stackKind": "delivery",
+        "windrun-ai:enablePulumiGithubOidc": "true",
+        "windrun-ai:pulumiOrganization": "windrun-pulumi-user",
+      },
+      githubToken,
+      pulumiAccessToken,
+    });
+
+    expect(resolved).toEqual({ ciEnabled: true });
+    const stackReferenceIndex = capturedResources.findIndex(
+      (resource) => resource.type === "pulumi:pulumi:StackReference",
+    );
+    const githubProviderIndex = capturedResources.findIndex(
+      (resource) => resource.type === "pulumi:providers:github",
+    );
+    expect(stackReferenceIndex).toBeGreaterThanOrEqual(0);
+    expect(githubProviderIndex).toBeGreaterThan(stackReferenceIndex);
+    expect(resourcesOfType("pulumi:providers:github")[0].inputs).toEqual({
+      owner: "rohanprabhu",
+      baseUrl: "https://api.github.com/",
+    });
+    expect(
+      resourcesOfType("pulumi:providers:pulumiservice")[0].inputs,
+    ).toEqual({ apiUrl: "https://api.pulumi.com" });
+    expect(JSON.stringify(capturedResources)).not.toContain(githubToken);
+    expect(JSON.stringify(capturedResources)).not.toContain(
+      pulumiAccessToken,
+    );
+    expect(
+      capturedResources.filter(
+        (resource) =>
+          resource.type.startsWith("gcp:") ||
+          resource.type.startsWith("digitalocean:"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("requires GITHUB_TOKEN before registering delivery resources", async () => {
+    await expectDeliveryCredentialError({
+      enablePulumiGithubOidc: false,
+      message: "GITHUB_TOKEN is required for the delivery stack",
+    });
+
+    expect(capturedResources).toEqual([]);
+  });
+
+  it("requires PULUMI_ACCESS_TOKEN only when Pulumi GitHub OIDC is enabled", async () => {
+    await expectDeliveryCredentialError({
+      enablePulumiGithubOidc: true,
+      githubToken,
+      message:
+        "PULUMI_ACCESS_TOKEN is required when Pulumi GitHub OIDC is enabled",
+    });
+
+    expect(capturedResources).toEqual([]);
+
+    const { resolved } = await runProgram({
+      stack: "delivery",
+      config: {
+        "windrun-ai:stackKind": "delivery",
+        "windrun-ai:enablePulumiGithubOidc": "false",
+        "windrun-ai:pulumiOrganization": "windrun-pulumi-user",
+      },
+      githubToken,
+    });
+    expect(resolved).toEqual({ ciEnabled: false });
+    expect(resourcesOfType("pulumi:providers:pulumiservice")).toEqual([]);
+    expect(resourcesOfType("pulumiservice:index:OidcIssuer")).toEqual([]);
   });
 
   it.each([
