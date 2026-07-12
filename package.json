@@ -1,11 +1,14 @@
 {
-	"scripts": {
-		"dev": "pnpm -C windrun-ai dev",
-		"build": "pnpm -C windrun-ai build",
-		"lint": "pnpm -C windrun-ai lint",
-		"preview": "pnpm -C windrun-ai preview"
-	},
-	"dependencies": {
-		"@tanstack/react-router": "^1.135.2"
-	}
+  "name": "windrun-ai-platform",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "engines": { "node": ">=22 <23" },
+  "scripts": {
+    "dev": "pnpm --filter @windrun/app dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "test:app": "pnpm --filter @windrun/app test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  }
 }

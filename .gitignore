@@ -10,6 +10,9 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+.next/
+coverage/
+*.tsbuildinfo
 *.local
 .worktrees/
 .superpowers/
@@ -24,6 +27,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-
-# TanStack Router
-routeTree.gen.ts
