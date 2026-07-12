@@ -70,3 +70,14 @@ export function createProjectServices(args: {
 
   return resources;
 }
+
+export function requireProjectService(
+  services: Record<string, gcp.projects.Service>,
+  api: string,
+) {
+  const service = services[api];
+  if (!service) {
+    throw new Error(`required API ${api} was not declared for this project`);
+  }
+  return service;
+}

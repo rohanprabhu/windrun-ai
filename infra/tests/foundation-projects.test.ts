@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { BILLING_ACCOUNT, ORGANIZATION_ID, PROJECT_IDS } from "../src/constants";
+import { createFoundationCoreResources } from "../src/foundation/core";
 import { createProjectBundle, type ProjectBundle } from "../src/foundation/projects";
 import { SHARED_APIS, WORKLOAD_APIS } from "../src/foundation/services";
 import { createBootstrapProvider } from "../src/providers";
@@ -146,5 +147,98 @@ describe("isolated GCP project factory", () => {
     expect(
       capturedResources.filter((resource) => !allowedTypes.has(resource.type)),
     ).toEqual([]);
+  });
+
+  it("adds isolated registries, IPs, and permissionless runtime identities", async () => {
+    const { staging, production } = await createFoundationProjects(false);
+    const core = createFoundationCoreResources({ staging, production });
+
+    await Promise.all([
+      resolveOutput(core.productionRepository.urn),
+      resolveOutput(core.stagingRepository.urn),
+      resolveOutput(core.productionAddress.urn),
+      resolveOutput(core.stagingAddress.urn),
+      resolveOutput(core.productionRuntimeServiceAccount.urn),
+      resolveOutput(core.stagingRuntimeServiceAccount.urn),
+    ]);
+
+    const repositories = resourcesOfType(
+      "gcp:artifactregistry/repository:Repository",
+    );
+    expect(repositories).toHaveLength(2);
+    for (const [logicalName, projectId] of [
+      ["production", PROJECT_IDS.production],
+      ["staging", PROJECT_IDS.staging],
+    ] as const) {
+      const repository = repositories.find(
+        (resource) => resource.name === `${logicalName}-repository`,
+      );
+      expect(repository?.inputs).toMatchObject({
+        project: projectId,
+        location: "asia-south1",
+        repositoryId: "windrun",
+        format: "DOCKER",
+        mode: "STANDARD_REPOSITORY",
+        dockerConfig: { immutableTags: false },
+      });
+      expect(repository?.dependencies).toContain(
+        mockUrn(
+          "gcp:projects/service:Service",
+          `${logicalName}-artifactregistry-api`,
+          "foundation-projects-test",
+        ),
+      );
+    }
+
+    const addresses = resourcesOfType("gcp:compute/globalAddress:GlobalAddress");
+    expect(addresses).toHaveLength(2);
+    for (const logicalName of ["production", "staging"] as const) {
+      const address = addresses.find(
+        (resource) => resource.name === `${logicalName}-address`,
+      );
+      expect(address?.inputs).toMatchObject({
+        project: PROJECT_IDS[logicalName],
+        addressType: "EXTERNAL",
+        ipVersion: "IPV4",
+      });
+      expect(address?.dependencies).toContain(
+        mockUrn(
+          "gcp:projects/service:Service",
+          `${logicalName}-compute-api`,
+          "foundation-projects-test",
+        ),
+      );
+    }
+
+    const runtimeAccounts = resourcesOfType(
+      "gcp:serviceaccount/account:Account",
+    );
+    expect(runtimeAccounts).toHaveLength(2);
+    expect(
+      runtimeAccounts.map((resource) => resource.inputs.accountId).sort(),
+    ).toEqual(["production-runtime", "staging-runtime"]);
+    for (const account of runtimeAccounts) {
+      const logicalName = account.name.startsWith("production")
+        ? "production"
+        : "staging";
+      expect(account.inputs.project).toBe(PROJECT_IDS[logicalName]);
+      expect(account.dependencies).toContain(
+        mockUrn(
+          "gcp:projects/service:Service",
+          `${logicalName}-iam-api`,
+          "foundation-projects-test",
+        ),
+      );
+    }
+
+    expect(
+      capturedResources.filter(
+        (resource) =>
+          resource.type.includes("IAM") ||
+          resource.type.includes("iAM") ||
+          resource.type.includes("iam"),
+      ),
+    ).toEqual([]);
+    expect(gcpResourcesWithoutExplicitProvider()).toEqual([]);
   });
 });
