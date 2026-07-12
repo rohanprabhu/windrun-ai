@@ -759,10 +759,13 @@ export interface EdgeStackArgs {
   provider: gcp.Provider;
   globalAddress: pulumi.Input<string>;
   certificateMapId: pulumi.Input<string>;
+  certificateStatus: pulumi.Input<string>;
 }
 
 export function createEdgeStack(args: EdgeStackArgs): {
   publicUrl: pulumi.Output<string>;
+  globalIp: pulumi.Output<string>;
+  certificateStatus: pulumi.Output<string>;
 };
 ```
 
@@ -831,6 +834,8 @@ stagingGlobalIp
 productionGlobalIp
 stagingCertificateMapId
 productionCertificateMapId
+stagingCertificateStatus
+productionCertificateStatus
 foundationWifProvider
 foundationDeployServiceAccount
 productionWifProvider
@@ -865,7 +870,7 @@ const foundation = new pulumi.StackReference(
 );
 ```
 
-Centralize all `requireOutput` calls in `foundation-outputs.ts`; stack builders must not use ad hoc output strings.
+Centralize all required-output access in `foundation-outputs.ts`; it must fail closed on missing, empty, or non-string values, and stack builders must not use ad hoc output strings.
 
 - [ ] **Step 4: Implement stack dispatch and exports**
 

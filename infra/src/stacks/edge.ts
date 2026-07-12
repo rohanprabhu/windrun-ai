@@ -9,10 +9,13 @@ export interface EdgeStackArgs {
   provider: gcp.Provider;
   globalAddress: pulumi.Input<string>;
   certificateMapId: pulumi.Input<string>;
+  certificateStatus: pulumi.Input<string>;
 }
 
 export interface EdgeStackOutputs {
   publicUrl: pulumi.Output<string>;
+  globalIp: pulumi.Output<string>;
+  certificateStatus: pulumi.Output<string>;
 }
 
 type EdgeName = "production" | "staging";
@@ -63,6 +66,7 @@ function createFrontends(args: {
   provider: gcp.Provider;
   globalAddress: pulumi.Input<string>;
   certificateMapId: pulumi.Input<string>;
+  certificateStatus: pulumi.Input<string>;
   httpsUrlMap: gcp.compute.URLMap;
   publicHost: string;
 }): EdgeStackOutputs {
@@ -130,6 +134,8 @@ function createFrontends(args: {
     publicUrl: pulumi
       .all([httpsForwardingRule.id, httpForwardingRule.id])
       .apply(() => `https://${args.publicHost}`),
+    globalIp: httpsForwardingRule.ipAddress,
+    certificateStatus: pulumi.output(args.certificateStatus),
   };
 }
 
@@ -164,6 +170,7 @@ function createProductionEdge(args: EdgeStackArgs): EdgeStackOutputs {
     provider: args.provider,
     globalAddress: args.globalAddress,
     certificateMapId: args.certificateMapId,
+    certificateStatus: args.certificateStatus,
     httpsUrlMap,
     publicHost: HOSTNAMES.production,
   });
@@ -237,6 +244,7 @@ function createStagingEdge(args: EdgeStackArgs): EdgeStackOutputs {
     provider: args.provider,
     globalAddress: args.globalAddress,
     certificateMapId: args.certificateMapId,
+    certificateStatus: args.certificateStatus,
     httpsUrlMap,
     publicHost: HOSTNAMES.staging,
   });

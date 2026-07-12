@@ -50,16 +50,24 @@ async function createFixture(kind: EdgeKind) {
     provider,
     globalAddress: fixture.address,
     certificateMapId: fixture.certificateMapId,
+    certificateStatus: "ACTIVE",
   });
-  const publicUrl = await resolveOutput(outputs.publicUrl);
+  const [publicUrl, globalIp, certificateStatus] = await Promise.all([
+    resolveOutput(outputs.publicUrl),
+    resolveOutput(outputs.globalIp),
+    resolveOutput(outputs.certificateStatus),
+  ]);
 
-  return { fixture, publicUrl };
+  return { fixture, publicUrl, globalIp, certificateStatus };
 }
 
 describe("stable Cloud Run edge stacks", () => {
   it("creates a production-only global external managed load balancer", async () => {
-    const { fixture, publicUrl } = await createFixture("production-edge");
+    const { fixture, publicUrl, globalIp, certificateStatus } =
+      await createFixture("production-edge");
     expect(publicUrl).toBe(fixture.publicUrl);
+    expect(globalIp).toBe(fixture.address);
+    expect(certificateStatus).toBe("ACTIVE");
 
     const negs = resourcesOfType(
       "gcp:compute/regionNetworkEndpointGroup:RegionNetworkEndpointGroup",
@@ -115,8 +123,11 @@ describe("stable Cloud Run edge stacks", () => {
   });
 
   it("shares one staging load balancer across staging and dynamic previews", async () => {
-    const { fixture, publicUrl } = await createFixture("staging-edge");
+    const { fixture, publicUrl, globalIp, certificateStatus } =
+      await createFixture("staging-edge");
     expect(publicUrl).toBe(fixture.publicUrl);
+    expect(globalIp).toBe(fixture.address);
+    expect(certificateStatus).toBe("ACTIVE");
 
     const negs = resourcesOfType(
       "gcp:compute/regionNetworkEndpointGroup:RegionNetworkEndpointGroup",

@@ -33,6 +33,7 @@ export const capturedCalls: Array<{
 }> = [];
 
 let activeStack = "test";
+let activeStackReferenceOutputs: Record<string, unknown> = {};
 let activeDigitalOceanRecords: Array<{
   type: string;
   value: string;
@@ -88,6 +89,12 @@ function resourceState(args: MockResourceArgs) {
   const state: Record<string, unknown> = { ...args.inputs };
 
   switch (args.type) {
+    case "pulumi:pulumi:StackReference":
+      return {
+        ...state,
+        outputs: activeStackReferenceOutputs,
+        secretOutputNames: [],
+      };
     case "gcp:organizations/project:Project":
       return { ...state, number: projectNumber(args.name) };
     case "gcp:serviceaccount/account:Account": {
@@ -180,6 +187,8 @@ function callResult(args: MockCallArgs) {
 export async function setWindrunMocks(
   stack = "test",
   options: {
+    organization?: string;
+    stackReferenceOutputs?: Record<string, unknown>;
     digitalOceanRecords?: Array<{
       type: string;
       value: string;
@@ -188,6 +197,7 @@ export async function setWindrunMocks(
   } = {},
 ) {
   activeStack = stack;
+  activeStackReferenceOutputs = options.stackReferenceOutputs ?? {};
   activeDigitalOceanRecords = options.digitalOceanRecords ?? [];
   capturedResources.length = 0;
   capturedCalls.length = 0;
@@ -229,6 +239,7 @@ export async function setWindrunMocks(
     "windrun-ai",
     stack,
     false,
+    options.organization ?? "mock-org",
   );
 }
 
