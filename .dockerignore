@@ -15,8 +15,15 @@ scripts
 **/*.tsbuildinfo
 **/.env
 **/.env.*
+**/.envrc
+**/.netrc
+**/.npmrc
 **/*.key
 **/*.pem
+**/*service-account*.json
+**/*service_account*.json
+**/application_default_credentials.json
+**/credentials.json
 **/.pulumi
 **/gha-creds-*.json
 **/.workload_identity.jwt

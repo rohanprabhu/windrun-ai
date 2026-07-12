@@ -26,6 +26,7 @@ const environments = new Set<AppEnvironment>([
   "preview",
   "local",
 ]);
+const pingDeadlineMs = 8_000;
 
 function stringOr(value: unknown, fallback: string) {
   return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -68,9 +69,17 @@ export function LaunchConsole({ initialStatus }: LaunchConsoleProps) {
   async function pingDeployment() {
     setPing({ kind: "pending" });
     const startedAt = performance.now();
+    const controller = new AbortController();
+    const deadline = window.setTimeout(
+      () => controller.abort(),
+      pingDeadlineMs,
+    );
 
     try {
-      const response = await fetch("/api/status", { cache: "no-store" });
+      const response = await fetch("/api/status", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
       if (!response.ok) {
         throw new Error("status request failed");
       }
@@ -91,6 +100,8 @@ export function LaunchConsole({ initialStatus }: LaunchConsoleProps) {
         kind: "error",
         message: "Could not reach this deployment. Try again in a moment.",
       });
+    } finally {
+      window.clearTimeout(deadline);
     }
   }
 

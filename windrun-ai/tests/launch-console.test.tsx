@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -42,6 +42,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -58,9 +59,68 @@ it("pings the deployment and exposes its request id and latency", async () => {
     screen.getByRole("button", { name: "Ping this deployment" }),
   );
 
-  expect(fetch).toHaveBeenCalledWith("/api/status", { cache: "no-store" });
+  expect(fetch).toHaveBeenCalledWith("/api/status", {
+    cache: "no-store",
+    signal: expect.any(AbortSignal),
+  });
   expect(await screen.findByText("11111111")).toBeInTheDocument();
   expect(screen.getByText(/\d+ ms/)).toBeInTheDocument();
+});
+
+it("aborts an unresponsive ping at its deadline and restores an accessible error state", async () => {
+  vi.useFakeTimers();
+  vi.mocked(fetch).mockImplementationOnce(
+    (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      }),
+  );
+  render(<LaunchConsole initialStatus={stagingStatus} />);
+
+  const button = screen.getByRole("button", {
+    name: "Ping this deployment",
+  });
+  fireEvent.click(button);
+
+  const signal = vi.mocked(fetch).mock.calls[0]?.[1]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
+  expect(button).toBeDisabled();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(8_000);
+  });
+
+  expect(signal?.aborted).toBe(true);
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Could not reach this deployment",
+  );
+  expect(button).toBeEnabled();
+});
+
+it("clears the abort deadline after a successful ping", async () => {
+  vi.useFakeTimers();
+  render(<LaunchConsole initialStatus={stagingStatus} />);
+
+  fireEvent.click(
+    screen.getByRole("button", { name: "Ping this deployment" }),
+  );
+
+  const signal = vi.mocked(fetch).mock.calls[0]?.[1]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(screen.getByText("11111111")).toBeInTheDocument();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(8_000);
+  });
+
+  expect(signal?.aborted).toBe(false);
 });
 
 it("reports a failed ping through an accessible live region", async () => {

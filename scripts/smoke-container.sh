@@ -7,11 +7,12 @@ port="18080"
 
 cleanup() {
   docker stop "$container" >/dev/null 2>&1 || true
+  docker rm "$container" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 docker build -f windrun-ai/Dockerfile -t "$image" .
-docker run --rm -d --name "$container" -p "127.0.0.1:${port}:8080" \
+docker run -d --name "$container" -p "127.0.0.1:${port}:8080" \
   -e PORT=8080 \
   -e APP_ENVIRONMENT=preview \
   -e GCP_PROJECT_ID=windrun-ai-staging-20260712 \
@@ -25,7 +26,7 @@ docker run --rm -d --name "$container" -p "127.0.0.1:${port}:8080" \
 
 healthy=false
 for _attempt in {1..30}; do
-  if curl --fail --silent "http://127.0.0.1:${port}/api/health" | grep -q '"ok":true'; then
+  if curl --connect-timeout 2 --max-time 5 --fail --silent "http://127.0.0.1:${port}/api/health" | grep -q '"ok":true'; then
     healthy=true
     break
   fi
@@ -43,7 +44,7 @@ if [[ "$runtime_uid" == "0" ]]; then
   exit 1
 fi
 
-status="$(curl --fail --silent --show-error "http://127.0.0.1:${port}/api/status")"
+status="$(curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "http://127.0.0.1:${port}/api/status")"
 node -e '
   const status = JSON.parse(process.argv[1]);
   const expected = {
@@ -58,10 +59,10 @@ node -e '
   };
   for (const [key, value] of Object.entries(expected)) {
     if (status[key] !== value) {
-      throw new Error(`${key}: expected ${value}, got ${status[key]}`);
+      throw new Error(key + ": expected " + value + ", got " + status[key]);
     }
   }
 ' "$status"
 
-curl --fail --silent --show-error "http://127.0.0.1:${port}/" | grep -q "Hello from the"
+curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "http://127.0.0.1:${port}/" | grep -q "Hello from the"
 echo "CONTAINER SMOKE OK image=${image} uid=${runtime_uid}"
