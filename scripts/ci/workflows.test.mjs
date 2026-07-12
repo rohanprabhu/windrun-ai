@@ -482,3 +482,142 @@ test('setup action supports a trusted checkout subdirectory', () => {
   )
   assert.equal(install?.['working-directory'], '${{ inputs.working-directory }}')
 })
+
+function assertPrivilegedOperationSteps(job, expected) {
+  assert.deepEqual(job.permissions, {
+    contents: 'read',
+    'id-token': 'write',
+  })
+  assertImmutableExternalActions({ jobs: { privileged: job } })
+
+  const checkoutIndex = job.steps.findIndex(
+    (step) => step.uses === checkoutAction,
+  )
+  const setupIndex = job.steps.findIndex(
+    (step) => step.uses === './.github/actions/setup',
+  )
+  const contractIndex = job.steps.findIndex(
+    (step) => step.run === 'pnpm ci:validate-contract',
+  )
+  const qualityIndex = job.steps.findIndex(
+    (step) => step.run === 'pnpm ci:quality',
+  )
+  const authIndex = job.steps.findIndex(
+    (step) => step.uses === './.github/actions/auth-cloud',
+  )
+  const previewIndex = job.steps.findIndex(
+    (step) => step.with?.command === 'preview',
+  )
+  const upIndex = job.steps.findIndex((step) => step.with?.command === 'up')
+
+  assert.ok(checkoutIndex >= 0)
+  assert.ok(setupIndex > checkoutIndex)
+  assert.ok(contractIndex > setupIndex)
+  assert.ok(qualityIndex > contractIndex)
+  assert.ok(authIndex > qualityIndex)
+  assert.ok(previewIndex > authIndex)
+  assert.ok(upIndex > previewIndex)
+  assert.equal(job.steps[checkoutIndex].with['persist-credentials'], false)
+  assert.deepEqual(job.steps[authIndex].with, expected.auth)
+
+  const pulumiSteps = job.steps.filter((step) => step.uses === pulumiAction)
+  assert.equal(pulumiSteps.length, 2)
+  assert.equal(pulumiSteps[0].with.command, 'preview')
+  assert.equal(pulumiSteps[0].if, undefined)
+  assert.equal(pulumiSteps[1].with.command, 'up')
+  assert.equal(pulumiSteps[1].if, "inputs.operation == 'apply'")
+  for (const step of pulumiSteps) {
+    assert.equal(step.with['stack-name'], expected.stackName)
+    assert.equal(step.with['work-dir'], 'infra')
+    assert.deepEqual(parse(step.with['config-map']), expected.config)
+  }
+}
+
+test('edge workflow exposes only isolated preview/apply choices', () => {
+  const workflow = readWorkflow('manage-edge.yml')
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch'])
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs, {
+    stack: {
+      type: 'choice',
+      required: true,
+      options: ['production-edge', 'staging-edge'],
+    },
+    operation: {
+      type: 'choice',
+      required: true,
+      default: 'preview',
+      options: ['preview', 'apply'],
+    },
+  })
+  assert.equal(
+    JSON.stringify(workflow.on.workflow_dispatch.inputs).includes('destroy'),
+    false,
+  )
+
+  const job = workflow.jobs.manage
+  assertIncludesEvery(job.if, [
+    "github.ref == 'refs/heads/main'",
+    "vars.PULUMI_CI_ENABLED == 'true'",
+  ])
+  assert.equal(job.environment, '${{ inputs.stack }}')
+  assert.deepEqual(job.concurrency, {
+    group: 'windrun-${{ inputs.stack }}',
+    'cancel-in-progress': false,
+  })
+  assertPrivilegedOperationSteps(job, {
+    auth: {
+      'pulumi-organization': '${{ vars.PULUMI_ORGANIZATION }}',
+      'gcp-project-id':
+        "${{ inputs.stack == 'production-edge' && 'windrun-ai-prod-20260712' || 'windrun-ai-staging-20260712' }}",
+      'workload-identity-provider':
+        "${{ inputs.stack == 'production-edge' && vars.GCP_WIF_PROVIDER_PRODUCTION_EDGE || vars.GCP_WIF_PROVIDER_STAGING_EDGE }}",
+      'service-account':
+        "${{ inputs.stack == 'production-edge' && vars.GCP_SERVICE_ACCOUNT_PRODUCTION_EDGE || vars.GCP_SERVICE_ACCOUNT_STAGING_EDGE }}",
+    },
+    stackName:
+      '${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/${{ inputs.stack }}',
+    config: {
+      'windrun-ai:stackKind': { value: '${{ inputs.stack }}' },
+    },
+  })
+})
+
+test('foundation workflow is main-only, reviewed, and has no destroy path', () => {
+  const workflow = readWorkflow('manage-foundation.yml')
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch'])
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs, {
+    operation: {
+      type: 'choice',
+      required: true,
+      default: 'preview',
+      options: ['preview', 'apply'],
+    },
+  })
+  assert.equal(
+    JSON.stringify(workflow.on.workflow_dispatch.inputs).includes('destroy'),
+    false,
+  )
+
+  const job = workflow.jobs.manage
+  assertIncludesEvery(job.if, [
+    "github.ref == 'refs/heads/main'",
+    "vars.PULUMI_CI_ENABLED == 'true'",
+  ])
+  assert.equal(job.environment, 'foundation')
+  assert.deepEqual(job.concurrency, {
+    group: 'windrun-foundation',
+    'cancel-in-progress': false,
+  })
+  assertPrivilegedOperationSteps(job, {
+    auth: {
+      'pulumi-organization': '${{ vars.PULUMI_ORGANIZATION }}',
+      'gcp-project-id': 'windrun-ai-shared-20260712',
+      'workload-identity-provider': '${{ vars.GCP_WIF_PROVIDER_FOUNDATION }}',
+      'service-account': '${{ vars.GCP_SERVICE_ACCOUNT_FOUNDATION }}',
+    },
+    stackName: '${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/foundation',
+    config: {
+      'windrun-ai:stackKind': { value: 'foundation' },
+    },
+  })
+})

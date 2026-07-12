@@ -1,0 +1,54 @@
+name: Manage foundation
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        required: true
+        default: preview
+        options: [preview, apply]
+permissions:
+  contents: read
+jobs:
+  manage:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      vars.PULUMI_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: foundation
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: windrun-foundation
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm ci:validate-contract
+      - run: pnpm ci:quality
+      - uses: ./.github/actions/auth-cloud
+        with:
+          pulumi-organization: ${{ vars.PULUMI_ORGANIZATION }}
+          gcp-project-id: windrun-ai-shared-20260712
+          workload-identity-provider: ${{ vars.GCP_WIF_PROVIDER_FOUNDATION }}
+          service-account: ${{ vars.GCP_SERVICE_ACCOUNT_FOUNDATION }}
+      - uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          command: preview
+          stack-name: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/foundation
+          work-dir: infra
+          config-map: |
+            windrun-ai:stackKind:
+              value: foundation
+      - if: inputs.operation == 'apply'
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          command: up
+          stack-name: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/foundation
+          work-dir: infra
+          config-map: |
+            windrun-ai:stackKind:
+              value: foundation

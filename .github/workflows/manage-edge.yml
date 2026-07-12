@@ -1,0 +1,58 @@
+name: Manage edge
+on:
+  workflow_dispatch:
+    inputs:
+      stack:
+        type: choice
+        required: true
+        options: [production-edge, staging-edge]
+      operation:
+        type: choice
+        required: true
+        default: preview
+        options: [preview, apply]
+permissions:
+  contents: read
+jobs:
+  manage:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      vars.PULUMI_CI_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stack }}
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: windrun-${{ inputs.stack }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm ci:validate-contract
+      - run: pnpm ci:quality
+      - uses: ./.github/actions/auth-cloud
+        with:
+          pulumi-organization: ${{ vars.PULUMI_ORGANIZATION }}
+          gcp-project-id: ${{ inputs.stack == 'production-edge' && 'windrun-ai-prod-20260712' || 'windrun-ai-staging-20260712' }}
+          workload-identity-provider: ${{ inputs.stack == 'production-edge' && vars.GCP_WIF_PROVIDER_PRODUCTION_EDGE || vars.GCP_WIF_PROVIDER_STAGING_EDGE }}
+          service-account: ${{ inputs.stack == 'production-edge' && vars.GCP_SERVICE_ACCOUNT_PRODUCTION_EDGE || vars.GCP_SERVICE_ACCOUNT_STAGING_EDGE }}
+      - uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          command: preview
+          stack-name: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/${{ inputs.stack }}
+          work-dir: infra
+          config-map: |
+            windrun-ai:stackKind:
+              value: ${{ inputs.stack }}
+      - if: inputs.operation == 'apply'
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          command: up
+          stack-name: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/${{ inputs.stack }}
+          work-dir: infra
+          config-map: |
+            windrun-ai:stackKind:
+              value: ${{ inputs.stack }}
