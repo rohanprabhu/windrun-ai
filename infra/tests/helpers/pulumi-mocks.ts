@@ -76,6 +76,32 @@ function resourceState(args: MockResourceArgs) {
   switch (args.type) {
     case "gcp:organizations/project:Project":
       return { ...state, number: projectNumber(args.name) };
+    case "gcp:serviceaccount/account:Account": {
+      const project = String(state.project);
+      const accountId = String(state.accountId);
+      const email = `${accountId}@${project}.iam.gserviceaccount.com`;
+      return {
+        ...state,
+        email,
+        member: `serviceAccount:${email}`,
+        name: `projects/${project}/serviceAccounts/${email}`,
+      };
+    }
+    case "gcp:artifactregistry/repository:Repository":
+      return {
+        ...state,
+        name: `projects/${String(state.project)}/locations/${String(state.location)}/repositories/${String(state.repositoryId)}`,
+      };
+    case "gcp:iam/workloadIdentityPool:WorkloadIdentityPool":
+      return {
+        ...state,
+        name: `projects/${projectNumber(String(state.project))}/locations/global/workloadIdentityPools/${String(state.workloadIdentityPoolId)}`,
+      };
+    case "gcp:iam/workloadIdentityPoolProvider:WorkloadIdentityPoolProvider":
+      return {
+        ...state,
+        name: `projects/${projectNumber(String(state.project))}/locations/global/workloadIdentityPools/${String(state.workloadIdentityPoolId)}/providers/${String(state.workloadIdentityPoolProviderId)}`,
+      };
     case "gcp:dns/managedZone:ManagedZone":
       return { ...state, nameServers: [...MOCK_NAME_SERVERS] };
     case "gcp:certificatemanager/dnsAuthorization:DnsAuthorization":

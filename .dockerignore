@@ -18,3 +18,5 @@ scripts
 **/*.key
 **/*.pem
 **/.pulumi
+**/gha-creds-*.json
+**/.workload_identity.jwt

@@ -4,7 +4,7 @@
 
 **Goal:** Implement the Pulumi TypeScript infrastructure for the three-project Windrun Cloud Run platform, including foundation, application, edge, preview, and the delivery-plane resources that enable keyless CI, while defining the contracts consumed by the separate deployment and ordered-teardown plan.
 
-**Architecture:** One Pulumi project in `infra/` dispatches by validated stack name and stack configuration into foundation, local-only delivery, application, edge, or preview builders. Foundation owns GCP/DigitalOcean resources and exports WIF values; post-claim delivery consumes those outputs and owns Pulumi Cloud OIDC plus GitHub environments, deployment policies, and Actions variables. Every GCP resource receives an explicit provider, and application identities cannot cross the production/staging boundary.
+**Architecture:** One Pulumi project in `infra/` dispatches by validated stack name and stack configuration into foundation, local-only delivery, application, edge, or preview builders. Foundation owns GCP/DigitalOcean resources and exports WIF values; post-claim delivery consumes those outputs and owns Pulumi Cloud OIDC plus GitHub environments, deployment policies, and Actions variables. Project creation, project metadata/billing repair, and final project deletion remain local Pulumi operations under an exact `rohan@windrun.ai` guard and are never delegated to CI. Every GCP resource receives an explicit provider, and routine application identities cannot cross the production/staging boundary.
 
 **Tech Stack:** Pulumi TypeScript, `@pulumi/gcp` 9.29.0, `@pulumi/digitalocean` 4.75.0, `@pulumi/docker-build` 0.0.20, `@pulumi/pulumiservice` 1.3.0, `@pulumi/github` 6.14.0, Vitest, pnpm, Google Cloud Run v2, Google Certificate Manager, Cloud DNS, DigitalOcean DNS, GitHub environments/variables, and GitHub OIDC federation resources.
 
@@ -27,7 +27,7 @@
 - No secrets, access tokens, credential JSON, or decrypted Pulumi values may be stack outputs or workflow logs.
 - The only Windrun project config keys are `windrun-ai:stackKind`, `windrun-ai:gitCommitSha`, `windrun-ai:pullRequestNumber`, `windrun-ai:allowProjectDeletion`, `windrun-ai:enablePulumiGithubOidc`, `windrun-ai:pulumiOrganization`, and encrypted `windrun-ai:digitalOceanToken`.
 - GitHub workflows and high-level preview/deploy/destroy/smoke-test scripts are owned exclusively by `docs/superpowers/plans/2026-07-12-windrun-ci-operations.md`; this plan must not create them.
-- The local-only `delivery` stack is applied after the Pulumi account is claimed, uses explicit GitHub and Pulumi Service providers authenticated only by local `GITHUB_TOKEN` and `PULUMI_ACCESS_TOKEN` environment variables, performs no `gh` mutations, and is destroyed before foundation.
+- The local-only `delivery` stack is applied after the Pulumi account is claimed, uses explicit GitHub and Pulumi Service providers authenticated only by local `GITHUB_TOKEN` and `PULUMI_ACCESS_TOKEN` environment variables, performs no direct vendor-CLI mutations, and is destroyed before foundation.
 
 ---
 
@@ -581,7 +581,7 @@ git commit -m "feat(infra): manage DNS delegation and certificates"
 - Test: `infra/tests/foundation-identity.test.ts`
 
 **Interfaces:**
-- Consumes: project bundles, runtime accounts, repositories, and organization/billing constants.
+- Consumes: project bundles, runtime accounts, and repositories.
 - Produces:
 
 ```ts
@@ -629,7 +629,7 @@ Additional restrictions:
 
 - Production: environment `production`, `push`, `refs/heads/main`, and exact `deploy-production.yml` workflow ref.
 - Staging: environment `staging`, `push`, `refs/heads/staging`, and exact `deploy-staging.yml` workflow ref.
-- Preview: environment `preview`, `pull_request`, a `refs/pull/*/merge` ref, and either exact `_preview-deploy.yml` or `_preview-destroy.yml` `job_workflow_ref` pinned to `refs/heads/main`.
+- Preview: environment `preview`, `pull_request`, base branch `main`, the exact `pull-request.yml` caller, and either exact `_preview-deploy.yml` or `_preview-destroy.yml` `job_workflow_ref` pinned to `refs/heads/main`. Deploy accepts only `refs/pull/*/merge`; destroy also accepts the exact `refs/heads/main` ref/caller pair because GitHub changes `ref` and `workflow_ref` to the base branch when a pull request closes by merging.
 - Production edge: environment `production-edge`, `workflow_dispatch`, `refs/heads/main`, and exact `manage-edge.yml` workflow ref.
 - Staging edge: environment `staging-edge`, `workflow_dispatch`, `refs/heads/main`, and exact `manage-edge.yml` workflow ref.
 - Foundation: environment `foundation`, `workflow_dispatch`, `refs/heads/main`, and exact `manage-foundation.yml` workflow ref.
@@ -641,9 +641,9 @@ Assert six separate pools/providers/service accounts, numeric `google.subject`, 
 Assert permission boundaries:
 
 - App identities: project `roles/run.admin`, repository `roles/artifactregistry.writer`, runtime account `roles/iam.serviceAccountUser`.
-- Preview identity: the same three permissions in staging, with Cloud Run condition restricted to resource names beginning `pr-` in `asia-south1`.
+- Preview identity: the same three permissions only in the isolated staging project. Do not add a `resource.name` condition: Cloud Run administrative permissions do not support that IAM attribute, so a `pr-*` condition would deny creation/update rather than constrain it. The trusted main-branch Pulumi program and validated `pr-<number>` stack contract enforce the service name.
 - Edge identities: `roles/compute.loadBalancerAdmin` and `roles/certificatemanager.viewer` in only their environment project.
-- Foundation identity: organization `roles/resourcemanager.projectCreator` and `roles/resourcemanager.projectDeleter`; billing `roles/billing.user`; only the project-local administrative roles required for Service Usage, IAM/WIF, DNS, Artifact Registry, Certificate Manager, and Compute addresses.
+- Foundation identity: only the project-local administrative roles required for normal Service Usage, IAM/WIF, DNS, Artifact Registry, Certificate Manager, and Compute-address updates. Its `roles/resourcemanager.projectIamAdmin` binding must use `api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly(...)` with the exact ten project roles managed by this program, excluding Project IAM Admin itself, Owner, Editor, and every unrelated role. This prevents foundation CI from turning its policy-management permission into unrestricted project ownership; changes to the limiting binding are local-only. It receives no organization role and no billing-account role; project creation/deletion, project metadata changes, and billing drift repair are local-only Pulumi escalation points under verified `rohan@windrun.ai` credentials.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -653,7 +653,7 @@ Expected: FAIL because federation resources do not exist.
 
 - [ ] **Step 3: Implement GCP federation and IAM**
 
-Use issuer `https://token.actions.githubusercontent.com`. Each service account receives a principal-set binding scoped to its own pool and repository ID using `principalSet://iam.googleapis.com/projects/<numeric-project-number>/locations/global/workloadIdentityPools/<pool-id>/attribute.repository_id/1095528250`. Do not grant staging identities in production or production identities in staging, and do not use GitHub `assertion.*` expressions in project/service-account IAM conditions; those claims exist only in the WIF provider CEL context.
+Use issuer `https://token.actions.githubusercontent.com`. Each service account receives a principal-set binding scoped to its own pool and repository ID using `principalSet://iam.googleapis.com/projects/<numeric-project-number>/locations/global/workloadIdentityPools/<pool-id>/attribute.repository_id/1095528250`. Do not grant staging identities in production or production identities in staging, and do not use GitHub `assertion.*` expressions in project/service-account IAM conditions; those claims exist only in the WIF provider CEL context. Create no organization or billing IAM resource. The local operations track must verify exact ADC ownership before initial creation, any project/billing repair, and final teardown.
 
 - [ ] **Step 4: Run tests and typecheck**
 
@@ -689,6 +689,7 @@ export interface AppStackArgs {
   runtimeServiceAccountEmail: pulumi.Input<string>;
   serviceName: string;
   gitCommitSha: string;
+  sourceRoot?: string;
 }
 
 export interface AppStackOutputs {
@@ -707,7 +708,7 @@ Assert:
 
 - Fixed services are exactly `production` and `staging`; `pr-42` remains `pr-42`.
 - Preview uses only the staging project/provider/repository/runtime account.
-- Docker context is repository root `..` from `infra/`, so the build can access the root `pnpm-lock.yaml`; Dockerfile is `../windrun-ai/Dockerfile`.
+- Docker context defaults to repository root `..` from `infra/`, so the build can access the root `pnpm-lock.yaml`; Dockerfile defaults to `../windrun-ai/Dockerfile`. An explicit absolute `sourceRoot` selects an application-only checkout for previews while the Pulumi program continues to run from trusted `main` code.
 - Docker Build has `push:true`, a tag containing service name plus full SHA, and produces the digest-qualified reference consumed by Cloud Run.
 - Cloud Run v2 ingress is `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER`.
 - Cloud Run v2 `gcp.cloudrunv2.Service.invokerIamDisabled` is `true` for Google-managed public invocation without a separate public IAM grant.
@@ -724,7 +725,7 @@ Expected: FAIL because `createAppStack` is missing.
 
 - [ ] **Step 3: Implement immutable image build and Cloud Run**
 
-Call `gcp.organizations.getClientConfigOutput({}, { provider })`; wrap its access token with `pulumi.secret`; authenticate Docker Build to `${REGION}-docker.pkg.dev` with username `oauth2accesstoken`; use build context `..` and Dockerfile `../windrun-ai/Dockerfile`; set `push:true`; and pass `image.ref` to Cloud Run. Set `APP_ENVIRONMENT` to `production`, `staging`, or `preview`; `PULUMI_STACK` to the actual Pulumi stack name; and `NEXT_PUBLIC_CANONICAL_HOST` to `app.windrun.ai`, `staging.app.windrun.ai`, or `${serviceName}.staging.app.windrun.ai` respectively. On the `gcp.cloudrunv2.Service`, set ingress to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` and `invokerIamDisabled: true`; do not create separate Cloud Run IAM resources. A failed build must prevent service registration.
+Call `gcp.organizations.getClientConfigOutput({}, { provider })`; wrap its access token with `pulumi.secret`; authenticate Docker Build to `${REGION}-docker.pkg.dev` with username `oauth2accesstoken`; use build context `sourceRoot ?? ".."` and Dockerfile `${sourceRoot}/windrun-ai/Dockerfile` or the default `../windrun-ai/Dockerfile`; set `push:true`; and pass `image.ref` to Cloud Run. Accept an explicit source root only as a local execution input, never as Pulumi config or a stack output. Set `APP_ENVIRONMENT` to `production`, `staging`, or `preview`; `PULUMI_STACK` to the actual Pulumi stack name; and `NEXT_PUBLIC_CANONICAL_HOST` to `app.windrun.ai`, `staging.app.windrun.ai`, or `${serviceName}.staging.app.windrun.ai` respectively. On the `gcp.cloudrunv2.Service`, set ingress to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER` and `invokerIamDisabled: true`; do not create separate Cloud Run IAM resources. A failed build must prevent service registration.
 
 - [ ] **Step 4: Run focused tests and typecheck**
 
@@ -844,7 +845,7 @@ stagingEdgeDeployServiceAccount
 
 - [ ] **Step 1: Write failing dispatcher tests**
 
-Run the Pulumi program under mocks for foundation, production, production-edge, staging, staging-edge, and `pr-1`. Assert each contains only allowed resource families and exports public URL, project ID, service name, image digest, global IP, or certificate state where applicable. Application and preview stacks may register Docker Build plus `gcp.cloudrunv2.Service`, must set `invokerIamDisabled: true`, and must not register Cloud Run IAM binding/member/policy resources.
+Run the Pulumi program under mocks for foundation, production, production-edge, staging, staging-edge, and `pr-1`. Assert each contains only allowed resource families and exports public URL, project ID, service name, image digest, global IP, or certificate state where applicable. Application and preview stacks may register Docker Build plus `gcp.cloudrunv2.Service`, must set `invokerIamDisabled: true`, and must not register Cloud Run IAM binding/member/policy resources. Assert every foundation custom resource is recorded with `protect:true` while `allowProjectDeletion=false`, and with `protect:false` only when that explicit teardown flag is true.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -866,7 +867,7 @@ Centralize all `requireOutput` calls in `foundation-outputs.ts`; stack builders 
 
 - [ ] **Step 4: Implement stack dispatch and exports**
 
-Foundation reads `allowProjectDeletion` and the encrypted DigitalOcean token. Delivery reads `enablePulumiGithubOidc` and `pulumiOrganization`. App stacks require `gitCommitSha`. Preview stacks additionally require `pullRequestNumber`, which must match the `pr-<number>` stack name. Export no tokens, credentials, or secret outputs.
+Foundation reads `allowProjectDeletion` and the encrypted DigitalOcean token. Before constructing any foundation resource, register a stack resource transform that sets `protect: !allowProjectDeletion` on every custom and component resource; this makes a normal destroy fail without deleting children. The acknowledged teardown must first set the flag and apply a full `pulumi up` to persist both unprotection and project `deletionPolicy: DELETE`. Delivery reads `enablePulumiGithubOidc` and `pulumiOrganization`. App stacks require `gitCommitSha`. Preview stacks additionally require `pullRequestNumber`, which must match the `pr-<number>` stack name. Export no tokens, credentials, or secret outputs.
 
 - [ ] **Step 5: Run the full infrastructure suite**
 
@@ -943,14 +944,14 @@ Assert that delivery:
 - When OIDC is enabled, uses an explicit `pulumiservice.Provider` with its access token sourced only from `PULUMI_ACCESS_TOKEN`; when OIDC is disabled, it creates neither the provider nor issuer.
 - Uses repository `windrun-ai` and never creates or updates the repository itself.
 - Creates `github.RepositoryEnvironment` resources for `foundation`, `production`, `production-edge`, `staging`, `staging-edge`, and `preview`.
-- Creates exact `github.RepositoryEnvironmentDeploymentPolicy` branch patterns: foundation `main`, production `main`, production-edge `main`, staging `staging`, staging-edge `main`, and preview `refs/pull/*/merge`.
+- Creates exact `github.RepositoryEnvironmentDeploymentPolicy` branch patterns: foundation `main`, production `main`, production-edge `main`, staging `staging`, staging-edge `main`, plus preview `refs/pull/*/merge` and `main`. The second preview policy exists only so a merged PR close event can run the exact trusted destroy workflow; both cloud trust policies still require `pull_request` plus the exact caller and destroy reusable workflow.
 - Configures reviewer user ID `136263` on privileged `foundation`, `production-edge`, and `staging-edge` environments, with `preventSelfReview: false` and `canAdminsBypass: false`.
 - Creates the fourteen `github.ActionsVariable` resources listed above; `PULUMI_ORGANIZATION` comes from config, and `PULUMI_CI_ENABLED` reflects `enablePulumiGithubOidc`.
 - Registers `PULUMI_CI_ENABLED` last with explicit dependencies on the optional OIDC issuer and every environment, deployment policy, and other Actions variable prerequisite.
 - Preserves distinct `PRODUCTION_EDGE_*` and `STAGING_EDGE_*` values.
 - Creates `pulumiservice.OidcIssuer` only when enabled, using `pulumiOrganization` and GitHub issuer `https://token.actions.githubusercontent.com`.
 - Creates no GCP, DigitalOcean, workflow, secret, or service-account-key resources.
-- Foundation itself contains no `pulumiservice` or `github` resources.
+- Foundation itself contains no organization/billing IAM, `pulumiservice`, or `github` resources.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -964,11 +965,11 @@ Read `GITHUB_TOKEN` from `process.env`, throw `GITHUB_TOKEN is required for the 
 
 - [ ] **Step 4: Implement environments, policies, and variables**
 
-Set every environment to custom deployment policies using the exact branch patterns from Step 1. Add reviewer user ID `136263` only to `foundation`, `production-edge`, and `staging-edge`, with `preventSelfReview: false` and `canAdminsBypass: false`. Populate all twelve `GCP_*` WIF/service-account variables only from the correspondingly typed foundation outputs, and set `PULUMI_ORGANIZATION` from config. Create those thirteen non-gate variables before `PULUMI_CI_ENABLED`.
+Set every environment to custom deployment policies using the exact branch patterns from Step 1, including both preview policies. Add reviewer user ID `136263` only to `foundation`, `production-edge`, and `staging-edge`, with `preventSelfReview: false` and `canAdminsBypass: false`. Populate all twelve `GCP_*` WIF/service-account variables only from the correspondingly typed foundation outputs, and set `PULUMI_ORGANIZATION` from config. Create those thirteen non-gate variables before `PULUMI_CI_ENABLED`.
 
 - [ ] **Step 5: Implement Pulumi Cloud OIDC and dispatch**
 
-When `enablePulumiGithubOidc=false`, omit `pulumiservice.OidcIssuer` and set the final gate variable to `false`. When true, create the issuer through the explicit provider with maximum expiration 3600 seconds and personal-token allow policies scoped to `pulumiOrganization`, immutable repository ID `1095528250`, owner ID `136263`, repository `rohanprabhu/windrun-ai`, audience, and trusted subjects. Register `PULUMI_CI_ENABLED` last, set it to the lowercase string form of `enablePulumiGithubOidc`, and give it explicit `dependsOn` edges to the issuer when present plus all six environments, six deployment policies, and thirteen preceding variables. Add the `delivery` branch to `src/index.ts`; it must load foundation outputs before registering delivery resources.
+When `enablePulumiGithubOidc=false`, omit `pulumiservice.OidcIssuer` and set the final gate variable to `false`. When true, create the issuer through the explicit provider with maximum expiration 3600 seconds and personal-token allow policies scoped to `pulumiOrganization`, immutable repository ID `1095528250`, owner ID `136263`, repository `rohanprabhu/windrun-ai`, audience, and trusted subjects. Register `PULUMI_CI_ENABLED` last, set it to the lowercase string form of `enablePulumiGithubOidc`, and give it explicit `dependsOn` edges to the issuer when present plus all six environments, seven deployment policies, and thirteen preceding variables. Add the `delivery` branch to `src/index.ts`; it must load foundation outputs before registering delivery resources.
 
 - [ ] **Step 6: Run focused and dispatcher tests**
 
@@ -977,7 +978,7 @@ pnpm -C infra test --run tests/delivery.test.ts tests/dispatcher.test.ts
 pnpm -C infra typecheck
 ```
 
-Expected: both commands exit 0; delivery contains no GCP/DigitalOcean resources and foundation contains no GitHub/Pulumi Service resources.
+Expected: both commands exit 0; delivery contains no GCP/DigitalOcean resources, while foundation contains no organization/billing IAM or GitHub/Pulumi Service resources.
 
 - [ ] **Step 7: Commit**
 
@@ -1153,8 +1154,10 @@ The CI/operations plan owns executable preview/application/edge teardown. Infras
 ```text
 all preview/application/edge stacks empty
 -> delivery destroyed
--> foundation allowProjectDeletion changed to true and previewed
--> foundation destroyed
+-> exact active gcloud + ADC identity verified as rohan@windrun.ai
+-> foundation allowProjectDeletion changed to true, previewed, and applied locally
+-> foundation state verified unprotected with project deletionPolicy DELETE
+-> foundation destroyed locally as rohan@windrun.ai
 ```
 
 Within foundation, DigitalOcean delegation is deleted before Cloud DNS, validation CNAMEs are deleted after certificates, and projects are scheduled last.
@@ -1181,23 +1184,25 @@ git commit -m "docs(infra): define delivery and operations handoff"
 
 1. **Initial project bootstrap:** The shared project and foundation WIF identity do not exist yet. The first foundation update must run locally using Application Default Credentials for exactly `rohan@windrun.ai`, with organization project-creation/deletion and billing permissions. The explicit bootstrap provider must omit `project`; per-project providers are created only after project outputs exist.
 
-2. **DigitalOcean delegation:** The DigitalOcean token must move from macOS Keychain into encrypted foundation stack configuration before the first foundation update. Delegation records cannot be constructed until Cloud DNS returns its assigned name servers. The Keychain item is deleted only after the encrypted stack config entry exists.
+2. **Project lifecycle boundary:** The foundation CI identity receives no organization or billing-account role. Initial project creation, project metadata changes, billing drift repair, and final project deletion are Pulumi-only local operations that must refuse to start unless both active gcloud identity and ADC resolve to exactly `rohan@windrun.ai`. Normal foundation refresh/update remains CI-capable through project-local roles; a real post-bootstrap preview validates that boundary before CI is enabled.
 
-3. **Pulumi account claim:** `pulumiservice.OidcIssuer` cannot be finalized before the unclaimed Pulumi account is claimed and the operator re-authenticates. Initial GCP deployment may proceed through foundation and the static application/edge stacks without delivery. After claim, the operator configures `windrun-ai:pulumiOrganization`, sets `windrun-ai:enablePulumiGithubOidc=true`, and applies the local-only delivery stack. Claiming invalidates the ephemeral credential.
+3. **DigitalOcean delegation:** The DigitalOcean token must move from macOS Keychain into encrypted foundation stack configuration before the first foundation update. Delegation records cannot be constructed until Cloud DNS returns its assigned name servers. The Keychain item is deleted only after the encrypted stack config entry exists.
 
-4. **Pulumi Individual token type:** Pulumi Individual accounts support personal OIDC tokens, not organization tokens. The claimed Pulumi username is not present in the design, so issuer policy and workflow authentication cannot be finalized until claim. If organization-scoped CI tokens are required, creating/upgrading to a Pulumi Team organization is a hard prerequisite.
+4. **Pulumi account claim:** `pulumiservice.OidcIssuer` cannot be finalized before the unclaimed Pulumi account is claimed and the operator re-authenticates. Initial GCP deployment may proceed through foundation and the static application/edge stacks without delivery. After claim, the operator configures `windrun-ai:pulumiOrganization`, sets `windrun-ai:enablePulumiGithubOidc=true`, and applies the local-only delivery stack. Claiming invalidates the ephemeral credential.
 
-5. **Preview fork isolation:** GitHub's base `repository_id` claim does not itself prove that a pull request's head repository is the same repository. The CI/operations plan must make credential-bearing preview work run in a reusable workflow pinned to `main`, and its caller must enforce `github.event.pull_request.head.repo.id == github.event.repository.id` before requesting OIDC credentials. This infrastructure plan owns only the matching WIF condition and GitHub environment deployment policy.
+5. **Pulumi Individual token type:** Pulumi Individual accounts support personal OIDC tokens, not organization tokens. The claimed Pulumi username is not present in the design, so issuer policy and workflow authentication cannot be finalized until claim. If organization-scoped CI tokens are required, creating/upgrading to a Pulumi Team organization is a hard prerequisite.
 
-6. **Certificate provisioning:** Authorization exists before its validation CNAME; the CNAME exists before certificate provisioning; the certificate exists before map entries. Tests must inspect Pulumi dependency URNs so destroy reverses this order and keeps renewal records until certificates are deleted.
+6. **Preview code isolation:** GitHub's base `repository_id` claim does not itself prove that a pull request's head repository is the same repository, and Cloud Run does not support service-name `resource.name` conditions for administrative permissions. The caller must enforce `github.event.pull_request.head.repo.id == github.event.repository.id`; the credentialed job must use a main-pinned reusable workflow on a fresh runner, execute Pulumi only from a separate trusted `main` checkout, and supply PR code only as Docker build context. The trusted Pulumi program validates `pr-<number>`. This infrastructure plan owns the matching WIF condition and GitHub environment deployment policy.
 
-7. **Edge bootstrap:** Edge stacks reference fixed Cloud Run service names rather than app-stack outputs. Deploy `production` before `production-edge` and `staging` before `staging-edge`; otherwise serverless NEG creation can fail because the named service is absent.
+7. **Certificate provisioning:** Authorization exists before its validation CNAME; the CNAME exists before certificate provisioning; the certificate exists before map entries. Tests must inspect Pulumi dependency URNs so destroy reverses this order and keeps renewal records until certificates are deleted.
 
-8. **Cross-stack teardown:** `StackReference` transfers outputs but does not automatically destroy independent stacks in dependency order. The CI/operations plan owns guarded orchestration in this mandatory order: preview/application/edge stacks, delivery, then foundation.
+8. **Edge bootstrap:** Edge stacks reference fixed Cloud Run service names rather than app-stack outputs. Deploy `production` before `production-edge` and `staging` before `staging-edge`; otherwise serverless NEG creation can fail because the named service is absent.
 
-9. **Project deletion boundary:** Project resources remain `PREVENT` during normal operation. The CI/operations plan's full-platform teardown may set `windrun-ai:allowProjectDeletion=true` only after delivery is destroyed, a foundation preview is reviewed, and the operator explicitly acknowledges permanent deletion. Deleted projects enter `DELETE_REQUESTED` for 30 days and their IDs can never be reused.
+9. **Cross-stack teardown:** `StackReference` transfers outputs but does not automatically destroy independent stacks in dependency order. The CI/operations plan owns guarded orchestration in this mandatory order: preview/application/edge stacks, delivery locally as `rohan@windrun.ai`, then foundation locally as `rohan@windrun.ai`.
 
-10. **External tool prerequisites:** Infrastructure implementation and verification require Docker Buildx, pnpm/Corepack, Pulumi CLI, macOS `security`, and `shellcheck`; applying delivery with OIDC enabled additionally requires `GITHUB_TOKEN` and `PULUMI_ACCESS_TOKEN` in the local environment. Missing tooling blocks the affected task and does not authorize bypassing tests or using alternate cloud mutation tools.
+10. **Project deletion boundary:** Project resources remain `PREVENT` during normal operation. The CI/operations plan's full-platform teardown may set `windrun-ai:allowProjectDeletion=true` only after delivery is destroyed, a foundation preview is reviewed locally, and the operator explicitly acknowledges permanent deletion. Deleted projects enter `DELETE_REQUESTED` for 30 days and their IDs can never be reused.
+
+11. **External tool prerequisites:** Infrastructure implementation and verification require Docker Buildx, pnpm/Corepack, Pulumi CLI, macOS `security`, and `shellcheck`; applying delivery with OIDC enabled additionally requires `GITHUB_TOKEN` and `PULUMI_ACCESS_TOKEN` in the local environment plus Application Default Credentials for exactly `rohan@windrun.ai`. Missing tooling blocks the affected task and does not authorize bypassing tests or using alternate cloud mutation tools.
 
 ---
 

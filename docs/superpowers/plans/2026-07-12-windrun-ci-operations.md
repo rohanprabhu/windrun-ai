@@ -4,7 +4,7 @@
 
 **Goal:** Build secretless GitHub delivery for the `windrun-ai` Pulumi project, with isolated production, staging, preview, production-edge, staging-edge, and foundation identities plus reproducible bootstrap and teardown operations.
 
-**Architecture:** GitHub Actions exchanges its OIDC identity independently with Pulumi Cloud and Google Workload Identity Federation. A thin pull-request caller runs uncredentialed checks and delegates credentialed preview work only to reusable workflows pinned to `main`, allowing both trust policies to require an exact `job_workflow_ref`. Routine branch workflows operate one application stack; manually approved edge and foundation workflows use distinct least-privilege identities, while a local-only Pulumi `delivery` stack owns all GitHub/Pulumi Cloud delivery-plane configuration.
+**Architecture:** GitHub Actions exchanges its OIDC identity independently with Pulumi Cloud and Google Workload Identity Federation. A thin pull-request caller runs uncredentialed checks and delegates credentialed preview work only to reusable workflows pinned to `main`, allowing both trust policies to require an exact `job_workflow_ref`; credentialed preview infrastructure runs from a separate trusted `main` checkout and treats PR code only as application build input. Routine branch workflows operate one application stack; manually approved edge and normal foundation workflows use distinct least-privilege identities, while project lifecycle/billing operations remain local under verified `rohan@windrun.ai` and a local-only Pulumi `delivery` stack owns all GitHub/Pulumi Cloud delivery-plane configuration.
 
 **Tech Stack:** GitHub Actions, Node.js 22 LTS, pnpm/Corepack, Pulumi TypeScript, Pulumi Cloud, Google Workload Identity Federation, Node's built-in test runner.
 
@@ -27,7 +27,10 @@
 - Credentialed preview deploy/destroy steps exist only in `_preview-deploy.yml@main` and `_preview-destroy.yml@main` reusable workflows.
 - The pull-request caller passes typed event data, inherits no long-lived secrets, and contains no credentialed shell or action step.
 - No workflow or operations script uses a service-account JSON key or long-lived Pulumi token.
-- No script creates, updates, or deletes a cloud resource through `gcloud`, `doctl`, or a provider console.
+- Root `.gitignore` and `.dockerignore` both exclude `gha-creds-*.json` and `.workload_identity.jwt`; policy tests enforce both patterns because static application builds use the repository root as Docker context.
+- Every checkout in a credentialed job sets `persist-credentials: false`; the untrusted preview source checkout must never leave `GITHUB_TOKEN` in `source/.git/config` where a PR-controlled Dockerfile could read it.
+- Every external GitHub Action in a credentialed workflow/composite action is pinned to a reviewed full 40-character commit SHA; mutable major-version tags are forbidden.
+- No script creates, updates, or deletes a cloud resource through `gcloud`, `doctl`, or a provider console. Local lifecycle scripts may use only read-only `gcloud auth list` and `gcloud auth application-default print-access-token` checks to refuse the wrong Google identity; all cloud mutations remain Pulumi operations.
 - GitHub environments, environment deployment policies, repository Actions variables, and Pulumi Cloud OIDC are mutated only by the local Pulumi `delivery` stack.
 - Direct GitHub configuration mutations are prohibited. Operations scripts may invoke only `gh auth status` and `gh auth token` to bootstrap the explicit `@pulumi/github` provider locally; operators may still use the documented `gh workflow run`/`gh run watch` commands to trigger and observe approved workflows.
 - CI stays disabled until the Pulumi agent account is claimed by `rohan@windrun.ai` and the agent logs into the transferred account.
@@ -194,7 +197,7 @@ description: Install Node and the repository-pinned pnpm dependencies
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@<reviewed-full-commit-sha>
       with:
         node-version: "22"
     - shell: bash
@@ -222,13 +225,13 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: pulumi/auth-actions@v2
+    - uses: pulumi/auth-actions@<reviewed-full-commit-sha>
       with:
         organization: ${{ inputs.pulumi-organization }}
         requested-token-type: urn:pulumi:token-type:access_token:personal
         scope: user:${{ inputs.pulumi-organization }}
         token-expiration: 3600
-    - uses: google-github-actions/auth@v3
+    - uses: google-github-actions/auth@<reviewed-full-commit-sha>
       with:
         project_id: ${{ inputs.gcp-project-id }}
         workload_identity_provider: ${{ inputs.workload-identity-provider }}
@@ -511,13 +514,14 @@ git commit -m "ci: deploy main and staging through isolated stacks"
 
 Assert that:
 
-- trigger types are `opened`, `reopened`, `synchronize`, and `closed`;
+- trigger types are `opened`, `reopened`, `synchronize`, and `closed`, restricted to pull requests targeting `main`;
 - `quality` has `contents: read` and no `id-token`;
-- `pull-request.yml` has no credentialed steps and both called jobs require `github.event.pull_request.head.repo.full_name == github.repository`;
+- `pull-request.yml` has no credentialed steps and both called jobs require both immutable `github.event.pull_request.head.repo.id == github.event.repository.id` and `github.event.pull_request.head.repo.full_name == github.repository` checks;
 - the called jobs use exactly `rohanprabhu/windrun-ai/.github/workflows/_preview-deploy.yml@main` and `rohanprabhu/windrun-ai/.github/workflows/_preview-destroy.yml@main`;
 - neither called job declares `secrets: inherit` or any explicit secret input;
 - both reusable workflows declare only `workflow_call`, recheck the same-repository pull-request event and every input against the immutable event payload, and use `windrun-preview-${{ inputs.pr-number }}` with cancellation disabled;
 - both reusables declare typed inputs and the trusted workflow owns every checkout, auth, Pulumi, smoke, destroy, and comment step;
+- credentialed preview Pulumi always runs from a distinct trusted `main` platform checkout; PR application source is checked out separately and supplied only as the Docker build source, never as executable infrastructure code;
 - all three files contain no `pull_request_target`;
 - destroy rejects `production`, `pr-0`, `pr-one`, and `pr-1/production`.
 
@@ -550,7 +554,7 @@ from `infra/`.
 
 - [ ] **Step 4: Implement the uncredentialed PR caller**
 
-Create `.github/workflows/pull-request.yml` with workflow-level `contents: read` only. Its `quality` job runs every non-closed PR. Its deploy job contains no `steps` and calls:
+Create `.github/workflows/pull-request.yml` with workflow-level `contents: read` only and `pull_request.branches: [main]`. Its `quality` job runs every non-closed PR. Its deploy job contains no `steps` and calls:
 
 ```yaml
 deploy-preview:
@@ -558,6 +562,7 @@ deploy-preview:
   if: >-
     needs.quality.result == 'success' &&
     vars.PULUMI_CI_ENABLED == 'true' &&
+    github.event.pull_request.head.repo.id == github.event.repository.id &&
     github.event.pull_request.head.repo.full_name == github.repository
   permissions:
     contents: read
@@ -578,6 +583,7 @@ destroy-preview:
   if: >-
     github.event.action == 'closed' &&
     vars.PULUMI_CI_ENABLED == 'true' &&
+    github.event.pull_request.head.repo.id == github.event.repository.id &&
     github.event.pull_request.head.repo.full_name == github.repository
   permissions:
     contents: read
@@ -614,7 +620,7 @@ on:
         required: true
 ```
 
-Its sole job must recheck `github.event_name == 'pull_request'`, `github.event.pull_request.head.repo.full_name == github.repository`, `inputs.pr-number == github.event.pull_request.number`, `inputs.merge-sha == github.event.pull_request.merge_commit_sha`, `inputs.head-sha == github.event.pull_request.head.sha`, and `inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)` before any step. It owns `environment: preview` and:
+Its sole job must recheck `github.event_name == 'pull_request'`, `github.event.action` is one of `opened|reopened|synchronize`, `github.event.pull_request.base.ref == 'main'`, `github.event.pull_request.base.repo.id == github.event.repository.id`, immutable `github.event.pull_request.head.repo.id == github.event.repository.id`, `github.event.pull_request.head.repo.full_name == github.repository`, `inputs.pr-number == github.event.pull_request.number`, `inputs.merge-sha == github.event.pull_request.merge_commit_sha`, `inputs.head-sha == github.event.pull_request.head.sha`, and `inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)` before any step. It owns `environment: preview` and:
 
 ```yaml
 concurrency:
@@ -622,7 +628,7 @@ concurrency:
   cancel-in-progress: false
 ```
 
-The trusted workflow checks out `inputs.merge-sha`, runs quality, authenticates with preview WIF, and runs preview/up for:
+The caller's uncredentialed `quality` job is the only job that executes repository scripts from `inputs.merge-sha`. The called workflow starts on a fresh runner, checks out `refs/heads/main` into `platform` with `persist-credentials:false`, checks out `inputs.merge-sha` separately into `source` with `persist-credentials:false`, and does not execute source-checkout scripts. It authenticates with preview WIF only after both checkouts, then runs Pulumi from `platform/infra` with `WINDRUN_APP_SOURCE=${{ github.workspace }}/source`. The trusted Pulumi program validates the `pr-N` stack/service name and uses that source directory only as Docker Build context. It runs preview/up for:
 
 ```yaml
 stack-name: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/pr-${{ inputs.pr-number }}
@@ -640,9 +646,9 @@ It smoke-tests `${{ inputs.preview-url }}/api/health` and calls `upsert-preview-
 
 - [ ] **Step 6: Implement the trusted destroy reusable workflow**
 
-Create `.github/workflows/_preview-destroy.yml` with typed inputs `pr-number: number`, `base-sha: string`, and `preview-url: string`. Its sole job repeats the event/repository/number/URL checks and also requires `inputs.base-sha == github.event.pull_request.base.sha`. It uses `environment: preview` and owns the identical non-canceling `windrun-preview-${{ inputs.pr-number }}` group.
+Create `.github/workflows/_preview-destroy.yml` with typed inputs `pr-number: number`, `base-sha: string`, and `preview-url: string`. Its sole job requires `github.event.action == 'closed'`, base branch `main`, base repository ID equal to the event repository ID, repeats both the immutable head-repository-ID and full-name event/repository/number/URL checks, and also requires `inputs.base-sha == github.event.pull_request.base.sha`. It uses `environment: preview` and owns the identical non-canceling `windrun-preview-${{ inputs.pr-number }}` group. Its WIF trust accepts either the PR merge ref/caller or exact `refs/heads/main` ref/caller because GitHub reports the base ref after a merged close event.
 
-It checks out `inputs.base-sha`, authenticates with preview WIF, installs Pulumi via `pulumi/actions@v7` without a command, invokes `destroy-preview.mjs` for `${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/pr-${{ inputs.pr-number }}`, then updates the marker comment to `destroyed` with `github.token`. It declares no secrets.
+It checks out `refs/heads/main` as its trusted platform code with `persist-credentials:false` (while still validating `inputs.base-sha` against the event), authenticates with preview WIF, installs Pulumi via a reviewed full-SHA pin of `pulumi/actions` without a command, invokes the trusted `destroy-preview.mjs` for `${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/pr-${{ inputs.pr-number }}`, then updates the marker comment to `destroyed` with `github.token`. It declares no secrets.
 
 - [ ] **Step 7: Validate fork, reusable trust, and concurrency behavior**
 
@@ -790,7 +796,7 @@ production-edge  workflow_dispatch / refs/heads/main    / manage-edge.yml
 staging          push              / refs/heads/staging / deploy-staging.yml
 staging-edge     workflow_dispatch / refs/heads/main    / manage-edge.yml
 preview          pull_request      / refs/pull/*/merge  / pull-request.yml / job_workflow_ref rohanprabhu/windrun-ai/.github/workflows/_preview-deploy.yml@refs/heads/main
-preview          pull_request      / refs/pull/*/merge  / pull-request.yml / job_workflow_ref rohanprabhu/windrun-ai/.github/workflows/_preview-destroy.yml@refs/heads/main
+preview destroy  pull_request      / refs/pull/*/merge or refs/heads/main / pull-request.yml / job_workflow_ref rohanprabhu/windrun-ai/.github/workflows/_preview-destroy.yml@refs/heads/main
 ```
 
 The token exchange still uses the prefixed action scope `user:<LOGIN>`; that value is intentionally different from the issuer policy's raw `userLogin`.
@@ -804,6 +810,7 @@ production-edge  main                required reviewer User 136263
 staging          staging             no reviewer
 staging-edge     main                required reviewer User 136263
 preview          refs/pull/*/merge   no reviewer
+preview          main                no reviewer (merged-close destroy only; OIDC still exact)
 ```
 
 Every environment/policy and Actions variable uses the explicit `github.Provider`. No default GitHub provider or direct `gh` mutation is permitted.
@@ -823,7 +830,7 @@ attribute.workflow_ref=assertion.workflow_ref
 attribute.environment=assertion.environment
 ```
 
-Only the preview provider extends the mapping with `attribute.job_workflow_ref=assertion.job_workflow_ref`; direct jobs are not guaranteed to receive that claim. All provider conditions require exact numeric repository and owner IDs plus the expected `environment`, `event_name`, `ref`, and `workflow_ref`. Foundation accepts only `manage-foundation.yml` on `main`. Production accepts only `deploy-production.yml` on `main`. Production-edge accepts only `manage-edge.yml` on `main`. Staging accepts only `deploy-staging.yml` on `staging`. Staging-edge accepts only `manage-edge.yml` on `main`. Preview additionally requires `event_name == 'pull_request'`, a `refs/pull/*/merge` ref, the exact `pull-request.yml` caller, and `assertion.job_workflow_ref` equal to one of the two exact main-branch reusable refs; it must never accept a wildcard reusable ref. Production-edge and staging-edge remain separate providers and service accounts with roles only in their own projects.
+Only the preview provider extends the mapping with `attribute.job_workflow_ref=assertion.job_workflow_ref`; direct jobs are not guaranteed to receive that claim. All provider conditions require exact numeric repository and owner IDs plus the expected `environment`, `event_name`, `ref`, and `workflow_ref`. Foundation accepts only `manage-foundation.yml` on `main`. Production accepts only `deploy-production.yml` on `main`. Production-edge accepts only `manage-edge.yml` on `main`. Staging accepts only `deploy-staging.yml` on `staging`. Staging-edge accepts only `manage-edge.yml` on `main`. Preview additionally requires `assertion.base_ref == 'main'`. Preview deploy requires `event_name == 'pull_request'`, a `refs/pull/*/merge` ref/caller, the exact `pull-request.yml` caller, and the exact main-pinned deploy `job_workflow_ref`. Preview destroy requires the exact main-pinned destroy `job_workflow_ref` and accepts either the PR merge ref/caller or the exact `refs/heads/main` ref/caller reported by GitHub for a merged close event; it must never accept a wildcard reusable ref. Production-edge and staging-edge remain separate providers and service accounts with roles only in their own projects.
 
 Each service-account impersonation member uses `principalSet://iam.googleapis.com/projects/<numeric-pool-project-number>/locations/global/workloadIdentityPools/<pool-id>/attribute.repository_id/1095528250`; a string project ID is invalid in that URI. GitHub `assertion.*` expressions belong only in the provider's CEL condition and must not be copied into project or service-account IAM binding conditions.
 
@@ -846,7 +853,7 @@ The script must:
 7. Run `pnpm ci:validate-contract` followed by `pnpm ci:quality` from the repository root and stop before preview if either fails.
 8. Run `pulumi preview --stack LOGIN/windrun-ai/delivery` with both tokens in its process environment.
 9. Run `pulumi up --yes --stack LOGIN/windrun-ai/delivery` with both tokens in its process environment.
-10. Let Pulumi create the six environments, reviewer/deployment policies, OIDC issuer, `PULUMI_ORGANIZATION`, the twelve GCP variables, and `PULUMI_CI_ENABLED=true`.
+10. Let Pulumi create the six environments, seven reviewer/deployment policies, OIDC issuer, `PULUMI_ORGANIZATION`, the twelve GCP variables, and `PULUMI_CI_ENABLED=true`.
 11. Require the `PULUMI_CI_ENABLED` `github.ActionsVariable` to depend on the issuer, all environments/policies, and the other thirteen variables so it is created last.
 12. Clear both in-process token values in a `finally` block; never print, persist in stack config, or store either as a GitHub Actions secret.
 
@@ -925,11 +932,11 @@ Expected: FAIL because `scripts/ops/lib/pulumi.mjs` is absent.
 
 - [ ] **Step 3: Implement the Pulumi-only process library**
 
-`runPulumi` always uses `cwd: infra` and inherits ADC. Production code must reject `PULUMI_BIN` values whose basename is not `pulumi`; tests may opt in through an exported injected runner rather than executing another cloud CLI. `stackHasResources` parses `pulumi stack export --stack STACK` and ignores the root `pulumi:pulumi:Stack` resource.
+`runPulumi` always uses `cwd: infra` and inherits ADC. Production code must reject `PULUMI_BIN` values whose basename is not `pulumi`; tests may opt in through an exported injected runner rather than executing another cloud CLI. `stackHasResources` parses `pulumi stack export --stack STACK` and ignores the root `pulumi:pulumi:Stack` resource. Export an `assertExactGoogleIdentity` preflight that permits only the exact read-only commands `gcloud auth list --filter=status:ACTIVE --format=value(account)` and `gcloud auth application-default print-access-token`, then calls Google's OpenID userinfo endpoint with the ADC token without logging it. It must refuse unless both emails are exactly `rohan@windrun.ai`; no generic gcloud runner is allowed.
 
 - [ ] **Step 4: Implement bootstrap**
 
-Bootstrap is explicitly two-phase. Before claim, the default invocation previews the five cloud stacks:
+Bootstrap is explicitly two-phase. Before selecting or previewing a stack, it runs `assertExactGoogleIdentity` and prints only `GOOGLE IDENTITY VERIFIED: rohan@windrun.ai`. Before claim, the default invocation previews the five cloud stacks:
 
 ```bash
 node scripts/ops/bootstrap-platform.mjs
@@ -1033,16 +1040,17 @@ The script must:
 5. If `delivery` exists, run `pnpm ci:validate-contract` and `pnpm ci:quality`, read the current local Pulumi and GitHub tokens without printing them, set `windrun-ai:enablePulumiGithubOidc=false` on delivery, and run delivery preview/up so `PULUMI_CI_ENABLED` becomes false before deletion.
 6. Destroy `delivery` with both explicit provider tokens in the Pulumi child-process environment; this removes Pulumi Cloud OIDC, GitHub environments/policies, and Actions variables through Pulumi.
 7. Verify delivery is absent or contains zero non-root resources.
-8. Set `windrun-ai:allowProjectDeletion=true` on foundation.
-9. Run and display foundation preview.
-10. Destroy foundation.
-11. Clear both local tokens and print that all three projects enter `DELETE_REQUESTED` with a 30-day recovery window and permanently unavailable project IDs.
+8. Verify active gcloud identity and ADC are both exactly `rohan@windrun.ai`, then set `windrun-ai:allowProjectDeletion=true` on foundation.
+9. Run and display foundation preview; require it to show only the expected protection removals and project deletion-policy transition before confirmation.
+10. Run foundation `pulumi up` locally to persist `protect:false` and `deletionPolicy: DELETE`, then verify those values from stack state.
+11. Destroy foundation locally under the same verified account.
+12. Clear both local tokens and print that all three projects enter `DELETE_REQUESTED` with a 30-day recovery window and permanently unavailable project IDs.
 
-If any pre-foundation operation fails, reset `windrun-ai:allowProjectDeletion=false` before exiting when the foundation stack still exists.
+If any operation fails after the teardown transition was applied but before foundation is fully destroyed, reset `windrun-ai:allowProjectDeletion=false` and run a local foundation `pulumi up` to re-protect all surviving resources and restore project `deletionPolicy: PREVENT` before exiting.
 
 - [ ] **Step 4: Document recovery boundaries**
 
-`docs/operations/teardown.md` must contain environment-only commands, full destroy command, exact dependency order, delivery disable/destroy before foundation, the `--destroy-projects` acknowledgement, the deletion-policy transition, the 30-day recovery window, and the rule that scripts never invoke `gcloud`, `doctl`, or mutating GitHub CLI subcommands.
+`docs/operations/teardown.md` must contain environment-only commands, full destroy command, exact dependency order, delivery disable/destroy before foundation, the `--destroy-projects` acknowledgement, the preview-plus-up protection/deletion-policy transition, state verification, the 30-day recovery window, and the rule that scripts invoke no mutating `gcloud`, `doctl`, or GitHub CLI subcommands. Document the two exact read-only gcloud identity checks as the only gcloud exception.
 
 - [ ] **Step 5: Verify**
 
@@ -1165,7 +1173,7 @@ git commit -m "docs: add Windrun platform operations runbooks"
 - [ ] No implementation step contains an unresolved value; the final Pulumi login is derived from `pulumi whoami` after claim.
 - [ ] All function names and foundation output names are consistent across tasks.
 - [ ] The local-only `delivery` stack owns every GitHub environment/policy/variable and Pulumi Cloud OIDC mutation; no `gh` mutation remains.
-- [ ] Preview trust uses the two exact main-pinned `job_workflow_ref` values and `refs/pull/*/merge`.
+- [ ] Preview trust uses the two exact main-pinned `job_workflow_ref` values; deploy accepts only `refs/pull/*/merge`, while destroy additionally accepts the exact merged-close `refs/heads/main` ref/caller pair.
 - [ ] CI enabling is the final dependency-ordered resource in the post-claim delivery update.
 - [ ] Full teardown destroys `delivery` after apps/edges and before foundation.
 - [ ] Every mutating Pulumi workflow or script performs or displays a preview first.

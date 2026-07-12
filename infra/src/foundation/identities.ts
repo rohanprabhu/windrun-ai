@@ -3,6 +3,14 @@ import * as gcp from "@pulumi/gcp";
 import type { ProjectBundle } from "./projects";
 import { requireProjectService } from "./services";
 
+export type DeploymentServiceAccountKind =
+  | "foundation"
+  | "production"
+  | "production-edge"
+  | "staging"
+  | "staging-edge"
+  | "preview";
+
 export interface RuntimeIdentityResources {
   productionRuntimeServiceAccount: gcp.serviceaccount.Account;
   stagingRuntimeServiceAccount: gcp.serviceaccount.Account;
@@ -41,4 +49,23 @@ export function createRuntimeIdentities(args: {
       args.staging,
     ),
   };
+}
+
+export function createDeploymentServiceAccount(
+  kind: DeploymentServiceAccountKind,
+  bundle: ProjectBundle,
+) {
+  return new gcp.serviceaccount.Account(
+    `${kind}-deploy`,
+    {
+      project: bundle.project.projectId,
+      accountId: `${kind}-deploy`,
+      displayName: `Windrun ${kind} deployment`,
+      description: `Keyless GitHub deployment identity for Windrun ${kind}`,
+    },
+    {
+      provider: bundle.provider,
+      dependsOn: [requireProjectService(bundle.services, "iam.googleapis.com")],
+    },
+  );
 }
