@@ -1,8 +1,9 @@
-import { spawnSync } from 'node:child_process'
 import { readFile as readFileFromDisk } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { createPulumiOperations } from './lib/pulumi.mjs'
 
 const MANAGED_BACKEND = 'https://api.pulumi.com'
 const EXPECTED_GITHUB_LOGIN = 'rohanprabhu'
@@ -32,25 +33,6 @@ function writeStdoutToProcess(value) {
 
 function writeStderrToProcess(value) {
   process.stderr.write(value)
-}
-
-async function runLocalCommand(command, args, options = {}) {
-  const capture = options.capture !== false
-  const result = spawnSync(command, args, {
-    cwd: options.cwd,
-    env: options.env,
-    encoding: 'utf8',
-    stdio: capture ? 'pipe' : 'inherit',
-  })
-
-  if (result.error || result.status !== 0) {
-    throw new Error('child command failed')
-  }
-
-  return {
-    stdout: capture ? (result.stdout ?? '') : '',
-    stderr: capture ? (result.stderr ?? '') : '',
-  }
 }
 
 function assertConfirmation(argv) {
@@ -186,7 +168,7 @@ function writeSanitizedResult(
 
 export async function enableCiAfterClaim({
   argv = process.argv.slice(2),
-  runCommand = runLocalCommand,
+  runCommand,
   readFile = readFileFromDisk,
   repositoryRoot = defaultRepositoryRoot,
   environment = process.env,
@@ -198,6 +180,9 @@ export async function enableCiAfterClaim({
 
   const root = resolve(repositoryRoot)
   const infraRoot = resolve(root, 'infra')
+  const executeCommand = runCommand ||
+    createPulumiOperations({ environment, repositoryRoot: root })
+      .runLifecycleCommand
   const childEnvironment = cleanChildEnvironment(environment)
   let pulumiAccessToken
   let githubToken
@@ -205,11 +190,11 @@ export async function enableCiAfterClaim({
 
   try {
     const whoamiResult = await runStep(
-      runCommand,
+      executeCommand,
       'pulumi whoami',
       'pulumi',
       ['whoami', '--json'],
-      { cwd: root, env: childEnvironment, capture: true },
+      { cwd: infraRoot, env: childEnvironment, capture: true },
     )
     const identity = parseJsonObject(whoamiResult.stdout, 'pulumi whoami')
     if (identity.url !== MANAGED_BACKEND) {
@@ -236,7 +221,7 @@ export async function enableCiAfterClaim({
     pulumiAccessToken = readPulumiToken(credentials)
 
     const githubStatus = await runStep(
-      runCommand,
+      executeCommand,
       'gh auth status',
       'gh',
       ['auth', 'status', '--hostname', 'github.com'],
@@ -254,7 +239,7 @@ export async function enableCiAfterClaim({
     }
 
     const githubTokenResult = await runStep(
-      runCommand,
+      executeCommand,
       'gh auth token',
       'gh',
       ['auth', 'token', '--hostname', 'github.com'],
@@ -268,7 +253,7 @@ export async function enableCiAfterClaim({
     const foundationStack = `${login}/windrun-ai/foundation`
     const deliveryStack = `${login}/windrun-ai/delivery`
     const foundationResult = await runStep(
-      runCommand,
+      executeCommand,
       'pulumi foundation outputs',
       'pulumi',
       ['stack', 'output', '--json', '--stack', foundationStack],
@@ -281,7 +266,7 @@ export async function enableCiAfterClaim({
     assertFoundationOutputs(foundationOutputs)
 
     await runStep(
-      runCommand,
+      executeCommand,
       'pulumi stack select',
       'pulumi',
       ['stack', 'select', '--create', deliveryStack],
@@ -294,7 +279,7 @@ export async function enableCiAfterClaim({
       ['windrun-ai:enablePulumiGithubOidc', 'true'],
     ]) {
       await runStep(
-        runCommand,
+        executeCommand,
         `pulumi config set ${key}`,
         'pulumi',
         ['config', 'set', key, value, '--stack', deliveryStack],
@@ -303,14 +288,14 @@ export async function enableCiAfterClaim({
     }
 
     await runStep(
-      runCommand,
+      executeCommand,
       'pnpm ci:validate-contract',
       'pnpm',
       ['ci:validate-contract'],
       { cwd: root, env: childEnvironment, capture: false },
     )
     await runStep(
-      runCommand,
+      executeCommand,
       'pnpm ci:quality',
       'pnpm',
       ['ci:quality'],
@@ -323,7 +308,7 @@ export async function enableCiAfterClaim({
       GITHUB_TOKEN: githubToken,
     }
     const previewResult = await runStep(
-      runCommand,
+      executeCommand,
       'pulumi preview',
       'pulumi',
       ['preview', '--stack', deliveryStack],
@@ -336,7 +321,7 @@ export async function enableCiAfterClaim({
       writeStderr,
     )
     const upResult = await runStep(
-      runCommand,
+      executeCommand,
       'pulumi up',
       'pulumi',
       ['up', '--yes', '--stack', deliveryStack],

@@ -321,7 +321,7 @@ test('runs the exact fail-closed delivery enablement order', async () => {
   assert.deepEqual(
     harness.calls.map(({ cwd }) => cwd),
     [
-      REPOSITORY_ROOT,
+      INFRA_ROOT,
       REPOSITORY_ROOT,
       REPOSITORY_ROOT,
       INFRA_ROOT,
