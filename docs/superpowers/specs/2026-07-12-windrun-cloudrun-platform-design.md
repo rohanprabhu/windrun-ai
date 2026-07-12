@@ -16,6 +16,7 @@ Every cloud resource change is performed by Pulumi. Shell scripts and GitHub Act
 - The staging load balancer routes new preview services through a serverless NEG URL mask and is not updated by preview-stack deployments.
 - The production project and production deployment identity have no access to the staging project, and staging/preview deployment identities have no access to the production project.
 - The DigitalOcean parent-zone delegation, Cloud DNS records, certificates, load balancers, Cloud Run services, registries, IAM, and CI federation are Pulumi-managed.
+- GitHub deployment environments, deployment-branch policies, and Actions variables are Pulumi-managed; no bootstrap script mutates them through the GitHub API.
 - Environment and full-platform teardown are documented, ordered, and reproducible.
 
 ## Fixed Decisions
@@ -55,16 +56,17 @@ One Pulumi project lives in `infra/`. Stack configuration selects one of the fol
 
 | Stack | Owns |
 | --- | --- |
-| `foundation` | Three GCP projects, required APIs, Artifact Registry repositories, reserved global IP addresses, Cloud DNS zone, DigitalOcean NS delegation, DNS A/wildcard records, Certificate Manager DNS authorizations/certificates/maps, runtime service accounts, GitHub/GCP federation, and Pulumi Cloud GitHub OIDC issuer |
+| `foundation` | Three GCP projects, required APIs, Artifact Registry repositories, reserved global IP addresses, Cloud DNS zone, DigitalOcean NS delegation, DNS A/wildcard records, Certificate Manager DNS authorizations/certificates/maps, runtime service accounts, and GitHub/GCP federation |
+| `delivery` | Pulumi Cloud GitHub OIDC issuer plus GitHub deployment environments, deployment-branch policies, and repository Actions variables; this local-only post-claim stack has no GCP resources |
 | `production-edge` | Production serverless NEG, backend service, URL map, HTTPS proxy, HTTP-to-HTTPS redirect, and global forwarding rules |
-| `production` | Commit-addressed production image, production Cloud Run v2 service, and unauthenticated invoker binding |
+| `production` | Commit-addressed production image and production Cloud Run v2 service with its invoker IAM check disabled |
 | `staging-edge` | Primary staging NEG/backend, preview URL-mask NEG/backend, host routing, HTTPS proxy, redirect, and global forwarding rules |
-| `staging` | Commit-addressed primary staging image, staging Cloud Run v2 service, and invoker binding |
-| `pr-<number>` | Commit-addressed preview image, one `pr-<number>` Cloud Run v2 service, and its invoker binding |
+| `staging` | Commit-addressed primary staging image and staging Cloud Run v2 service with its invoker IAM check disabled |
+| `pr-<number>` | Commit-addressed preview image and one `pr-<number>` Cloud Run v2 service with its invoker IAM check disabled |
 
 Stable edge resources are deliberately separate from application stacks. Normal pushes update only an application stack. Preview stacks never import, update, or depend on another preview stack and never own a load-balancer or DNS resource.
 
-The initial deployment order is `foundation`, `production`, `production-edge`, `staging`, then `staging-edge`. The edge stacks refer to the fixed Cloud Run service names `production` and `staging`, so the primary services are created first. Preview stacks can be created after `staging-edge` is active.
+The initial GCP deployment order is `foundation`, `production`, `production-edge`, `staging`, then `staging-edge`. The edge stacks refer to the fixed Cloud Run service names `production` and `staging`, so the primary services are created first. After the Pulumi account is claimed, the local-only `delivery` stack enables keyless CI and manages the repository-side configuration through Pulumi. Preview stacks can be created after `staging-edge` and `delivery` are active.
 
 ## Request Routing
 
@@ -85,7 +87,7 @@ The initial deployment order is `foundation`, `production`, `production-edge`, `
 5. The URL mask extracts the hostname label and routes it to the same-named Cloud Run service in `windrun-ai-staging-20260712` and `asia-south1`.
 6. Creating service `pr-42` makes `pr-42.staging.app.windrun.ai` routable without changing DNS, the URL map, the backend service, or the NEG. Destroying that service removes the environment without an edge update.
 
-The preview-mask backend intentionally exposes only same-project Cloud Run services that allow unauthenticated invocation. Any internal Cloud Run service must retain authenticated invocation, in which case the public load balancer cannot expose it successfully even if a matching hostname is requested.
+The preview-mask backend intentionally exposes only same-project Cloud Run services that disable the Cloud Run invoker IAM check. This is the current recommended public-access mode and works with domain-restricted sharing. Any internal Cloud Run service must retain the invoker check, in which case the public load balancer cannot expose it successfully even if a matching hostname is requested. In both cases, the Cloud Run ingress setting still rejects traffic that does not arrive through an allowed internal or Cloud Load Balancing path.
 
 ## DNS and Certificates
 
@@ -134,15 +136,16 @@ GitHub repository `rohanprabhu/windrun-ai` is the sole trusted source.
 
 Preview concurrency is keyed by pull-request number and queues updates without canceling an in-progress `pulumi up`. Staging and production also use non-canceling deployment queues so an update is never interrupted. The close workflow shares the pull-request concurrency group and waits for any preview update to finish before destroying the stack.
 
-Pulumi Cloud trusts GitHub OIDC tokens only for immutable repository ID `1095528250`, owner ID `136263`, and repository `rohanprabhu/windrun-ai`. GCP uses separate Workload Identity pools/providers and service accounts for production, staging, preview, edge, and foundation operations. Production trust accepts only the `main` branch workflow. Staging trust accepts only the `staging` branch workflow. Preview trust accepts same-repository pull-request workflows and receives only Cloud Run, Artifact Registry write, and runtime-service-account impersonation permissions in the staging project. Pull requests from forks run uncredentialed tests only and cannot deploy. Workflows never use `pull_request_target` to execute pull-request code. No CI identity receives a static Google service-account key.
+Pulumi Cloud trusts GitHub OIDC tokens only for immutable repository ID `1095528250`, owner ID `136263`, and repository `rohanprabhu/windrun-ai`. GCP uses separate Workload Identity pools/providers and service accounts for production, staging, preview, production edge, staging edge, and foundation operations. Production trust accepts only the `main` branch workflow. Staging trust accepts only the `staging` branch workflow. Preview trust accepts same-repository pull-request workflows and receives only Cloud Run, Artifact Registry write, and runtime-service-account impersonation permissions in the staging project. Credential-bearing preview jobs run in reusable workflows pinned to `main`, and their identity conditions match the exact reusable-workflow reference. Pull requests from forks run uncredentialed tests only and cannot deploy. Workflows never use `pull_request_target` to execute pull-request code. No CI identity receives a static Google service-account key.
 
-The Pulumi account is currently an unclaimed agent account. Code and local bootstrap deployment may proceed during its 72-hour write window, but durable Pulumi Cloud OIDC policy and fully qualified CI stack names are enabled only after the user claims the account with `rohan@windrun.ai` and the agent authenticates to the transferred account. Claiming invalidates the ephemeral credential, so this is an explicit final-bootstrap checkpoint rather than an implicit background step.
+The Pulumi account is currently an unclaimed agent account. Code and the local GCP bootstrap deployment may proceed during its 72-hour write window, but the `delivery` stack is created only after the user claims the account with `rohan@windrun.ai` and the agent authenticates to the transferred account. Claiming invalidates the ephemeral credential, so this is an explicit final-bootstrap checkpoint rather than an implicit background step. The delivery stack uses the local GitHub login only as provider authentication; all repository mutations remain Pulumi resources.
 
 ## Secrets
 
 - Google local provisioning uses Application Default Credentials created by the exact account `rohan@windrun.ai`.
 - CI obtains short-lived GCP credentials through Workload Identity Federation.
-- CI obtains short-lived Pulumi Cloud credentials through `pulumi/auth-actions` and the Pulumi OIDC issuer managed by the foundation stack.
+- CI obtains short-lived Pulumi Cloud credentials through `pulumi/auth-actions` and the Pulumi OIDC issuer managed by the delivery stack.
+- The post-claim delivery update authenticates the explicit GitHub provider from the local `rohanprabhu` CLI session; the token is never printed, committed, or installed as a CI secret.
 - The DigitalOcean PAT has exactly `domain:create`, `domain:read`, `domain:update`, and `domain:delete`, expires in 90 days, and is used only by the foundation stack.
 - The PAT is temporarily encrypted in macOS Keychain service `com.windrun.pulumi.digitalocean`. It is moved into encrypted Pulumi stack configuration when the foundation stack is initialized, then the temporary Keychain item is deleted.
 - No token, service-account JSON key, plaintext stack secret, or `.env` credential is committed.
@@ -164,7 +167,7 @@ The Pulumi account is currently an unclaimed agent account. Code and local boots
 2. Component-test the status panel, latency interaction, accessibility labels, and reduced-motion behavior.
 3. Build the Next.js standalone output and run a container-level health check locally.
 4. Use Pulumi mocks to assert exact project ownership, provider selection, IAM boundaries, DNS names, URL-mask value, fixed service names, and stack-kind validation.
-5. Run `pulumi preview` for foundation, both edge stacks, both primary app stacks, and a sample `pr-1` preview stack.
+5. Run `pulumi preview` for foundation, delivery, both edge stacks, both primary app stacks, and a sample `pr-1` preview stack.
 6. Deploy foundation and primary stacks, then verify DNS delegation, managed certificates, HTTP redirect, direct `run.app` ingress rejection, and the three public routes.
 7. Create and destroy a real sample preview stack to prove the staging edge remains unchanged and the preview hostname begins and ceases serving as expected.
 
@@ -175,7 +178,8 @@ Teardown is intentionally ordered and wrapped by scripts that invoke Pulumi only
 1. Destroy all `pr-*` stacks and remove their empty Pulumi stacks.
 2. Destroy `staging` and `production` application stacks.
 3. Destroy `staging-edge` and `production-edge`.
-4. Set foundation config `allowProjectDeletion=true`, preview the resulting deletion-policy change, then destroy `foundation`. It removes delegated DNS records, Cloud DNS, certificates, reserved IPs, registries, IAM/federation, and finally schedules all three GCP projects for deletion.
+4. Destroy `delivery`, which removes CI enablement, repository variables, environment policies, environments, and the Pulumi Cloud OIDC issuer through Pulumi.
+5. Set foundation config `allowProjectDeletion=true`, preview the resulting deletion-policy change, then destroy `foundation`. It removes delegated DNS records, Cloud DNS, certificates, reserved IPs, registries, IAM/federation, and finally schedules all three GCP projects for deletion.
 
 Project resources use deletion policy `PREVENT` while `allowProjectDeletion=false` and `DELETE` only during the acknowledged full teardown. The foundation destroy script requires an explicit `--destroy-projects` acknowledgement and verifies that no application, preview, or edge stacks still contain resources. Project deletion is the final recovery boundary; deleted projects enter Google Cloud `DELETE_REQUESTED` state and retain a 30-day recovery window, while their project IDs remain permanently unavailable for reuse.
 
