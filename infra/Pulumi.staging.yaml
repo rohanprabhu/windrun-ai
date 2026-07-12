@@ -1,0 +1,4 @@
+config:
+  pulumi:disable-default-providers:
+    - gcp
+  windrun-ai:stackKind: staging
