@@ -15,7 +15,7 @@ The only Windrun project config keys are:
 | `windrun-ai:pullRequestNumber` | `preview`; must match its `pr-<number>` stack name. |
 | `windrun-ai:allowProjectDeletion` | `foundation`; false during normal operation and true only during acknowledged full teardown. |
 | `windrun-ai:enablePulumiGithubOidc` | `delivery`; false before account claim and true at the post-claim checkpoint. |
-| `windrun-ai:pulumiOrganization` | `delivery`; set to the claimed identity reported by `pulumi whoami`. |
+| `windrun-ai:pulumiOrganization` | `delivery`; set to the canonical Pulumi login returned by `pulumi whoami` after claim. |
 | `windrun-ai:digitalOceanToken` | `foundation`; an encrypted secret read separately from the typed non-secret config. |
 
 The seven stack kinds are:
@@ -84,11 +84,11 @@ Supply `windrun-ai:gitCommitSha` to the two application stacks. `production` mus
 
 ### Phase 2: delivery after account claim
 
-Claim the Pulumi account as `rohan@windrun.ai`, discard the invalidated ephemeral credential, and re-authenticate Pulumi. Then initialize `delivery` locally, set `windrun-ai:pulumiOrganization` to the exact result of `pulumi whoami`, and set `windrun-ai:enablePulumiGithubOidc=true`.
+Complete the Pulumi account claim using `rohan@windrun.ai` as the ownership email, discard the invalidated ephemeral credential, and re-authenticate Pulumi. `rohan@windrun.ai` is the claim email, not the Pulumi login; the login remains unknown until re-authentication. `windrun-ai:pulumiOrganization` comes only from `pulumi whoami`. Initialize `delivery` locally with that exact result, then set `windrun-ai:enablePulumiGithubOidc=true`.
 
 Export `GITHUB_TOKEN` and `PULUMI_ACCESS_TOKEN` into the local shell from their secure post-claim credential sources. Never print, commit, or place either value in Pulumi config. Apply `delivery` locally with ADC still resolving to exactly `rohan@windrun.ai`.
 
-The dispatcher validates `GITHUB_TOKEN`; it also validates `PULUMI_ACCESS_TOKEN` when OIDC is enabled. The GitHub provider plugin consumes `GITHUB_TOKEN` from the Pulumi child-process environment. The Pulumi Service provider plugin consumes `PULUMI_ACCESS_TOKEN` from that environment. The explicit GitHub provider pins `https://api.github.com/`, and the explicit Pulumi Service provider pins `https://api.pulumi.com`; tokens are not provider inputs or Pulumi state. No token is an output, resource name, Actions variable, log value, or committed value. Delivery invokes no `gh` command.
+The dispatcher validates `GITHUB_TOKEN`; it also validates `PULUMI_ACCESS_TOKEN` when OIDC is enabled. The GitHub provider plugin consumes `GITHUB_TOKEN` from the Pulumi child-process environment. The Pulumi Service provider plugin consumes `PULUMI_ACCESS_TOKEN` from that environment. Explicit provider resources persist only non-secret configuration: GitHub owner `rohanprabhu` with official endpoint `https://api.github.com/`, and the Pulumi Service official endpoint `https://api.pulumi.com`. Tokens are not provider inputs or Pulumi state. No token is an output, resource name, Actions variable, log value, or committed value. Delivery invokes no `gh` command.
 
 Preview CI remains disabled until delivery creates every issuer, environment, policy, and variable prerequisite and registers `PULUMI_CI_ENABLED=true` last.
 

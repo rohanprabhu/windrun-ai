@@ -105,6 +105,18 @@ describe.each(documents)("infra/%s", (fileName) => {
     );
     expect(document).toContain("pulumi whoami");
     expect(document).toContain("windrun-ai:pulumiOrganization");
+    expect(document).toContain(
+      "`rohan@windrun.ai` is the claim email, not the Pulumi login",
+    );
+    expect(document).toContain(
+      "`windrun-ai:pulumiOrganization` comes only from `pulumi whoami`",
+    );
+    expect(document).not.toContain(
+      "Claim the Pulumi account as `rohan@windrun.ai`",
+    );
+    expect(document).not.toMatch(
+      /Pulumi (?:login|username) (?:is|equals) `rohan@windrun\.ai`/iu,
+    );
     expect(document).toContain("windrun-ai:enablePulumiGithubOidc=true");
     expect(document).toContain("GITHUB_TOKEN");
     expect(document).toContain("PULUMI_ACCESS_TOKEN");
@@ -126,6 +138,11 @@ describe.each(documents)("infra/%s", (fileName) => {
     expect(document).toContain("administrators cannot bypass");
     expect(document).toContain("https://api.github.com/");
     expect(document).toContain("https://api.pulumi.com");
+    expect(document).toContain("persist only non-secret configuration");
+    expect(document).toContain("GitHub owner `rohanprabhu`");
+    expect(document).not.toContain(
+      "contain only the official endpoints",
+    );
     expect(document).toContain(
       "GitHub provider plugin consumes `GITHUB_TOKEN`",
     );
