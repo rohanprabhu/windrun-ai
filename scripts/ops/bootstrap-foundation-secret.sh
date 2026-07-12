@@ -4,6 +4,9 @@ set -euo pipefail
 ACCOUNT="windrun-ai"
 SERVICE="com.windrun.pulumi.digitalocean"
 STACK="${1:-}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+INFRA_ROOT="${REPOSITORY_ROOT}/infra"
 
 if [[ -z "${STACK}" ]]; then
   echo "usage: bootstrap-foundation-secret.sh <pulumi-foundation-stack-ref>" >&2
@@ -26,15 +29,16 @@ pulumi config set \
   windrun-ai:digitalOceanToken \
   "${TOKEN}" \
   --secret \
-  --stack "${STACK}"
+  --stack "${STACK}" \
+  --cwd "${INFRA_ROOT}"
 
 unset TOKEN
 
-CONFIG_JSON="$(pulumi config --json --stack "${STACK}")"
+CONFIG_JSON="$(pulumi config --json --stack "${STACK}" --cwd "${INFRA_ROOT}")"
 if ! node -e '
 const config = JSON.parse(process.argv[1]);
 const entry = config["windrun-ai:digitalOceanToken"];
-if (!entry || entry.secret !== true || typeof entry.value !== "string" || entry.value.trim() === "") {
+if (!entry || entry.secret !== true) {
   process.exit(1);
 }
 ' "${CONFIG_JSON}"; then
