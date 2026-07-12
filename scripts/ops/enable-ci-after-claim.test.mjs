@@ -18,6 +18,7 @@ import {
 
 const BACKEND = 'https://api.pulumi.com'
 const LOGIN = 'claimed-user'
+const APP_BACKEND = `https://app.pulumi.com/${LOGIN}`
 const PULUMI_TOKEN = 'pul-secret-fixture'
 const GITHUB_TOKEN = 'gh-secret-fixture'
 const REPOSITORY_ROOT = '/workspace/windrun-ai'
@@ -194,6 +195,23 @@ test('refuses a non-managed Pulumi backend before reading credentials', async ()
     ['pulumi whoami --json'],
   )
   assert.deepEqual(harness.reads, [])
+})
+
+test('accepts the managed Pulumi app identity URL', async () => {
+  const harness = createHarness({
+    whoami: { user: LOGIN, url: APP_BACKEND },
+  })
+
+  await harness.execute()
+
+  assert.equal(
+    harness.calls.some(
+      ({ command, args }) =>
+        command === 'pulumi' &&
+        args.join(' ') === `preview --stack ${DELIVERY_STACK}`,
+    ),
+    true,
+  )
 })
 
 test('refuses when local Pulumi credentials are not current for the managed backend', async () => {

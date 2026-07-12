@@ -7,6 +7,7 @@ import { createPulumiOperations } from './lib/pulumi.mjs'
 import { hasExactlyOneActiveGitHubLogin } from './lib/github-auth.mjs'
 
 const MANAGED_BACKEND = 'https://api.pulumi.com'
+const MANAGED_APP_URL = 'https://app.pulumi.com'
 const EXPECTED_GITHUB_LOGIN = 'rohanprabhu'
 const CONFIRMED_OWNER_EMAIL = 'rohan@windrun.ai'
 
@@ -86,6 +87,16 @@ function readPulumiToken(credentials) {
     throw new Error('Pulumi access token is empty')
   }
   return token
+}
+
+function isManagedPulumiIdentity(identity) {
+  const login =
+    typeof identity.user === 'string' ? identity.user.trim() : ''
+  return (
+    login !== '' &&
+    (identity.url === MANAGED_BACKEND ||
+      identity.url === `${MANAGED_APP_URL}/${login}`)
+  )
 }
 
 function assertFoundationOutputs(outputs) {
@@ -173,8 +184,10 @@ export async function enableCiAfterClaim({
       { cwd: infraRoot, env: childEnvironment, capture: true },
     )
     const identity = parseJsonObject(whoamiResult.stdout, 'pulumi whoami')
-    if (identity.url !== MANAGED_BACKEND) {
-      throw new Error(`Pulumi backend must be exactly ${MANAGED_BACKEND}`)
+    if (!isManagedPulumiIdentity(identity)) {
+      throw new Error(
+        `Pulumi backend must be exactly ${MANAGED_BACKEND} or ${MANAGED_APP_URL}/<login>`,
+      )
     }
     if (typeof identity.user !== 'string' || identity.user.trim() === '') {
       throw new Error('Pulumi login must be a non-empty string')

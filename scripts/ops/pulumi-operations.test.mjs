@@ -34,6 +34,7 @@ const PROJECT = 'windrun-ai'
 const OWNER_EMAIL = 'rohan@windrun.ai'
 const GIT_SHA = '0123456789abcdef0123456789abcdef01234567'
 const MANAGED_BACKEND = 'https://api.pulumi.com'
+const MANAGED_APP_BACKEND = `https://app.pulumi.com/${LOGIN}`
 const PULUMI_TOKEN = 'pulumi-platform-token-fixture'
 const GITHUB_TOKEN = 'github-platform-token-fixture'
 const PROJECT_IDS = Object.freeze([
@@ -87,7 +88,7 @@ function createProcessHarness({
     const command = commandText(executable, args)
     if (command.endsWith('pulumi whoami --json')) {
       return {
-        stdout: `${JSON.stringify({ user: LOGIN, url: 'https://api.pulumi.com' })}\n`,
+        stdout: `${JSON.stringify({ user: LOGIN, url: MANAGED_APP_BACKEND })}\n`,
         stderr: '',
       }
     }
@@ -603,7 +604,7 @@ test('bootstrap previews and applies the five pre-claim stacks in exact order th
 const { appendFileSync } = require('node:fs')
 appendFileSync(process.env.PULUMI_FAKE_LOG, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }) + '\\n')
 if (process.argv.slice(2).join(' ') === 'whoami --json') {
-  process.stdout.write(${JSON.stringify(`${JSON.stringify({ user: LOGIN, url: 'https://api.pulumi.com' })}\n`)})
+  process.stdout.write(${JSON.stringify(`${JSON.stringify({ user: LOGIN, url: MANAGED_APP_BACKEND })}\n`)})
 }
 `,
     )
@@ -709,7 +710,7 @@ test('clean bootstrap preview stops safely after foundation when outputs do not 
     async runPulumi(args) {
       calls.push([...args])
       if (args[0] === 'whoami') {
-        return JSON.stringify({ user: LOGIN, url: 'https://api.pulumi.com' })
+        return JSON.stringify({ user: LOGIN, url: MANAGED_APP_BACKEND })
       }
       if (args[0] === 'stack' && args[1] === 'output') {
         return '{}'
@@ -755,7 +756,7 @@ test('bootstrap preview continues to all consumers when foundation outputs exist
     async runPulumi(args) {
       calls.push([...args])
       if (args[0] === 'whoami') {
-        return JSON.stringify({ user: LOGIN, url: 'https://api.pulumi.com' })
+        return JSON.stringify({ user: LOGIN, url: MANAGED_APP_BACKEND })
       }
       if (args[0] === 'stack' && args[1] === 'output') {
         return JSON.stringify(
@@ -796,7 +797,7 @@ function teardownHarness(stackNames) {
       async runPulumi(args) {
         calls.push([...args])
         if (args[0] === 'whoami') {
-          return JSON.stringify({ user: LOGIN, url: 'https://api.pulumi.com' })
+          return JSON.stringify({ user: LOGIN, url: MANAGED_APP_BACKEND })
         }
         if (args[0] === 'stack' && args[1] === 'ls') {
           return JSON.stringify(stackNames.map((name) => ({ name })))
@@ -1144,7 +1145,7 @@ function createPlatformHarness() {
     }
     if (args[0] === 'whoami') {
       return {
-        stdout: JSON.stringify({ user: LOGIN, url: MANAGED_BACKEND }),
+        stdout: JSON.stringify({ user: LOGIN, url: MANAGED_APP_BACKEND }),
         stderr: '',
       }
     }

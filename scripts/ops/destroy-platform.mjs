@@ -8,6 +8,7 @@ import { createPulumiOperations, stackRef } from './lib/pulumi.mjs'
 import { hasExactlyOneActiveGitHubLogin } from './lib/github-auth.mjs'
 
 const MANAGED_BACKEND = 'https://api.pulumi.com'
+const MANAGED_APP_URL = 'https://app.pulumi.com'
 const EXPECTED_GITHUB_LOGIN = 'rohanprabhu'
 const REFUSAL_TEXT =
   'REFUSED: pass --destroy-projects to acknowledge deletion of all three GCP projects'
@@ -72,17 +73,19 @@ function parseJsonObject(raw, label) {
 
 function readPulumiLogin(raw) {
   const identity = parseJsonObject(raw, 'pulumi whoami')
+  const login =
+    typeof identity.user === 'string' ? identity.user.trim() : ''
   if (
-    identity.url !== MANAGED_BACKEND ||
-    typeof identity.user !== 'string' ||
-    identity.user.trim() === '' ||
-    identity.user !== identity.user.trim()
+    login === '' ||
+    identity.user !== login ||
+    (identity.url !== MANAGED_BACKEND &&
+      identity.url !== `${MANAGED_APP_URL}/${login}`)
   ) {
     throw new PlatformSafetyError(
       'pulumi whoami must identify the managed backend and canonical login',
     )
   }
-  return identity.user
+  return login
 }
 
 function numericStackOrder(left, right) {

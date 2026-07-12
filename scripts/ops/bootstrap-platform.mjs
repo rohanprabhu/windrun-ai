@@ -10,6 +10,7 @@ import {
 import { validateAppCheckpoint } from '../ci/validate-app-checkpoint.mjs'
 
 const MANAGED_BACKEND = 'https://api.pulumi.com'
+const MANAGED_APP_URL = 'https://app.pulumi.com'
 
 export const PHASE_ONE_STACKS = Object.freeze([
   'foundation',
@@ -72,14 +73,16 @@ function readLogin(raw) {
   } catch {
     throw new Error('pulumi whoami must return valid JSON')
   }
+  const login =
+    typeof identity.user === 'string' ? identity.user.trim() : ''
   if (
-    identity?.url !== MANAGED_BACKEND ||
-    typeof identity.user !== 'string' ||
-    identity.user.trim() === ''
+    login === '' ||
+    (identity?.url !== MANAGED_BACKEND &&
+      identity?.url !== `${MANAGED_APP_URL}/${login}`)
   ) {
     throw new Error('pulumi whoami must identify the managed backend and login')
   }
-  return identity.user.trim()
+  return login
 }
 
 export async function bootstrapPlatform({
