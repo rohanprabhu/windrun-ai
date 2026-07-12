@@ -23,6 +23,8 @@ const EARLIER_STATIC_STACKS = Object.freeze([
 ])
 const ALLOWED_STACK_NAME =
   /^(?:foundation|delivery|production|production-edge|staging|staging-edge|pr-[1-9][0-9]*)$/u
+const FOUNDATION_PROJECT_URN_PREFIX =
+  'urn:pulumi:foundation::windrun-ai::gcp:organizations/project:Project::'
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const defaultRepositoryRoot = resolve(scriptDirectory, '..', '..')
 
@@ -128,6 +130,19 @@ function parseInventory(raw, login) {
         `pulumi stack ls returned unexpected Windrun stack ${stack}`,
       )
     }
+    if (
+      entry.updateInProgress !== undefined &&
+      typeof entry.updateInProgress !== 'boolean'
+    ) {
+      throw new PlatformSafetyError(
+        `${stack} has malformed updateInProgress state`,
+      )
+    }
+    if (entry.updateInProgress === true) {
+      throw new PlatformSafetyError(
+        `${stack} has updateInProgress=true`,
+      )
+    }
     active.add(stack)
   }
   return active
@@ -171,8 +186,14 @@ function parseStackState(raw, label) {
   }
 
   const seenUrns = new Set()
+  const normalizedResources = []
   let rootCount = 0
   for (const resource of deployment.resources) {
+    const isRoot = resource?.type === 'pulumi:pulumi:Stack'
+    const inputs =
+      isRoot && resource?.inputs === undefined ? {} : resource?.inputs
+    const outputs =
+      isRoot && resource?.outputs === undefined ? {} : resource?.outputs
     if (
       !isObject(resource) ||
       typeof resource.urn !== 'string' ||
@@ -182,8 +203,8 @@ function parseStackState(raw, label) {
       resource.type.trim() !== resource.type ||
       resource.type === '' ||
       typeof resource.custom !== 'boolean' ||
-      !isObject(resource.inputs) ||
-      (resource.outputs !== undefined && !isObject(resource.outputs)) ||
+      !isObject(inputs) ||
+      (outputs !== undefined && !isObject(outputs)) ||
       seenUrns.has(resource.urn)
     ) {
       throw new PlatformSafetyError(
@@ -215,16 +236,21 @@ function parseStackState(raw, label) {
         `${label} stack export contains unsafe resource state`,
       )
     }
+    normalizedResources.push({ ...resource, inputs, outputs })
   }
   if (rootCount !== 1) {
     throw new PlatformSafetyError(
       `${label} stack export must contain exactly one root resource`,
     )
   }
-  const descendants = deployment.resources.filter(
+  const descendants = normalizedResources.filter(
     ({ type }) => type !== 'pulumi:pulumi:Stack',
   )
-  return { checkpoint, descendants, resources: deployment.resources }
+  return {
+    checkpoint,
+    descendants,
+    resources: normalizedResources,
+  }
 }
 
 function assertProjectStates(descendants, deletionPolicy, label) {
@@ -237,7 +263,12 @@ function assertProjectStates(descendants, deletionPolicy, label) {
     new Set(foundIds).size !== PROJECT_IDS.length ||
     !PROJECT_IDS.every((projectId) => foundIds.includes(projectId)) ||
     projects.some(
-      ({ inputs, outputs }) =>
+      ({ custom, id, inputs, outputs, urn }) =>
+        custom !== true ||
+        typeof urn !== 'string' ||
+        !urn.startsWith(FOUNDATION_PROJECT_URN_PREFIX) ||
+        id !== `projects/${inputs.projectId}` ||
+        outputs?.projectId !== inputs.projectId ||
         inputs.deletionPolicy !== deletionPolicy ||
         outputs?.deletionPolicy !== deletionPolicy,
     )
@@ -287,6 +318,7 @@ function assertFoundationState(raw, mode) {
 }
 
 function assertNoErrorDiagnostics(diagnostics) {
+  if (diagnostics === undefined) return
   if (
     !Array.isArray(diagnostics) ||
     diagnostics.some(
@@ -306,6 +338,7 @@ function assertEmptyDiff(step) {
       (!Array.isArray(step.diffReasons) ||
         step.diffReasons.length !== 0)) ||
     (step.detailedDiff !== undefined &&
+      step.detailedDiff !== null &&
       (!isObject(step.detailedDiff) ||
         Object.keys(step.detailedDiff).length !== 0))
   ) {
@@ -332,9 +365,11 @@ function assertProjectDiff(step) {
   }
 }
 
-function assertSafePreviewState(state) {
+function assertSafePreviewState(state, isRoot) {
+  const inputs =
+    isRoot && state.inputs === undefined ? {} : state.inputs
   if (
-    !isObject(state.inputs) ||
+    !isObject(inputs) ||
     (state.protect !== undefined &&
       typeof state.protect !== 'boolean') ||
     !falseOrAbsent(state.delete) ||
@@ -350,13 +385,58 @@ function assertSafePreviewState(state) {
       'foundation preview contains unsafe resource state',
     )
   }
+  return inputs
+}
+
+function assertPreviewIdentity(
+  state,
+  current,
+  deletionPolicy,
+  { planned = false } = {},
+) {
+  const projectId = current.inputs.projectId
+  const commonMismatch =
+    state.urn !== current.urn ||
+    state.type !== current.type ||
+    state.custom !== current.custom ||
+    state.inputs?.projectId !== projectId ||
+    state.inputs?.deletionPolicy !== deletionPolicy
+  const plannedIdMismatch =
+    planned &&
+    state.id !== undefined &&
+    state.id !== '' &&
+    state.id !== current.id
+  const plannedOutputsMismatch =
+    planned &&
+    state.outputs !== undefined &&
+    (!isObject(state.outputs) ||
+      (state.outputs.projectId !== undefined &&
+        state.outputs.projectId !== projectId) ||
+      (state.outputs.deletionPolicy !== undefined &&
+        state.outputs.deletionPolicy !== deletionPolicy))
+  const persistedMismatch =
+    !planned &&
+    (state.id !== current.id ||
+      state.outputs?.projectId !== projectId ||
+      state.outputs?.deletionPolicy !== deletionPolicy)
+  if (
+    commonMismatch ||
+    plannedIdMismatch ||
+    plannedOutputsMismatch ||
+    persistedMismatch
+  ) {
+    throw new PlatformSafetyError(
+      'foundation preview contained an unexpected project identity',
+    )
+  }
 }
 
 function validateFoundationPreview(raw, baseline) {
   const preview = parseJsonObject(raw, 'foundation preview')
   assertNoErrorDiagnostics(preview.diagnostics)
   if (
-    preview.maybeCorrupt !== false ||
+    (preview.maybeCorrupt !== undefined &&
+      preview.maybeCorrupt !== false) ||
     !Array.isArray(preview.steps) ||
     !isObject(preview.changeSummary) ||
     preview.steps.length !== baseline.resources.length
@@ -396,16 +476,22 @@ function validateFoundationPreview(raw, baseline) {
     }
     seen.add(step.urn)
     const current = baselineByUrn.get(step.urn)
-    assertSafePreviewState(step.oldState)
-    assertSafePreviewState(step.newState)
     const isRoot = current.type === 'pulumi:pulumi:Stack'
     const isProject =
       current.type === 'gcp:organizations/project:Project'
+    const oldInputs = assertSafePreviewState(step.oldState, isRoot)
+    const newInputs = assertSafePreviewState(step.newState, isRoot)
     if (
-      !isDeepStrictEqual(step.oldState.inputs, current.inputs) ||
+      step.oldState.urn !== current.urn ||
+      step.oldState.type !== current.type ||
+      step.oldState.custom !== current.custom ||
+      step.newState.urn !== current.urn ||
+      step.newState.type !== current.type ||
+      step.newState.custom !== current.custom ||
+      !isDeepStrictEqual(oldInputs, current.inputs) ||
       (isRoot &&
         (step.op !== 'same' ||
-          !isDeepStrictEqual(step.newState.inputs, current.inputs))) ||
+          !isDeepStrictEqual(newInputs, current.inputs))) ||
       (!isRoot &&
         (step.oldState.protect !== true ||
           (step.newState.protect !== undefined &&
@@ -424,17 +510,21 @@ function validateFoundationPreview(raw, baseline) {
       if (
         step.op !== 'update' ||
         current.inputs.deletionPolicy !== 'PREVENT' ||
-        !isDeepStrictEqual(step.newState.inputs, expectedInputs)
+        !isDeepStrictEqual(newInputs, expectedInputs)
       ) {
         throw new PlatformSafetyError(
           'foundation preview contained an unexpected project transition',
         )
       }
+      assertPreviewIdentity(step.oldState, current, 'PREVENT')
+      assertPreviewIdentity(step.newState, current, 'DELETE', {
+        planned: true,
+      })
       assertProjectDiff(step)
     } else {
       if (
         step.op !== 'same' ||
-        !isDeepStrictEqual(step.newState.inputs, current.inputs)
+        !isDeepStrictEqual(newInputs, current.inputs)
       ) {
         throw new PlatformSafetyError(
           'foundation preview contained an unexpected operation',
@@ -906,6 +996,12 @@ export async function destroyPlatform({
         writeStdout,
         writeStderr,
       })
+      await assertEarlierStacksEmpty(
+        runPulumi,
+        childEnvironment,
+        login,
+        { includeDelivery: false },
+      )
       await runProviderPulumi({
         args: ['destroy', '--yes', '--remove', '--stack', delivery],
         environment: providerEnvironment,
@@ -1003,25 +1099,18 @@ export async function destroyPlatform({
       { capture: false, env: childEnvironment },
       'foundation destroy',
     )
-    const finalInventory = await listActiveStacks(
+    foundationDestroyed = true
+    const finalInventory = await assertEarlierStacksEmpty(
       runPulumi,
       childEnvironment,
       login,
+      { includeDelivery: true },
     )
     if (finalInventory.has('foundation')) {
-      const remaining = await readStackState(
-        runPulumi,
-        childEnvironment,
-        login,
-        'foundation',
+      throw new PlatformSafetyError(
+        'foundation stack still exists after destroy --remove',
       )
-      if (remaining.state.descendants.length !== 0) {
-        throw new PlatformSafetyError(
-          'foundation still contains non-root resources after destroy',
-        )
-      }
     }
-    foundationDestroyed = true
   } catch (error) {
     const primary =
       error instanceof PlatformSafetyError

@@ -1,0 +1,157 @@
+{
+  "steps": [
+    {
+      "op": "same",
+      "urn": "urn:pulumi:foundation::windrun-ai::pulumi:pulumi:Stack::windrun-ai-foundation",
+      "oldState": {
+        "urn": "urn:pulumi:foundation::windrun-ai::pulumi:pulumi:Stack::windrun-ai-foundation",
+        "type": "pulumi:pulumi:Stack",
+        "custom": false
+      },
+      "newState": {
+        "urn": "urn:pulumi:foundation::windrun-ai::pulumi:pulumi:Stack::windrun-ai-foundation",
+        "type": "pulumi:pulumi:Stack",
+        "custom": false
+      },
+      "detailedDiff": null
+    },
+    {
+      "op": "update",
+      "urn": "urn:pulumi:foundation::windrun-ai::gcp:organizations/project:Project::shared-project",
+      "oldState": {
+        "urn": "urn:pulumi:foundation::windrun-ai::gcp:organizations/project:Project::shared-project",
+        "type": "gcp:organizations/project:Project",
+        "custom": true,
+        "id": "projects/windrun-ai-shared-20260712",
+        "protect": true,
+        "inputs": {
+          "projectId": "windrun-ai-shared-20260712",
+          "deletionPolicy": "PREVENT"
+        },
+        "outputs": {
+          "projectId": "windrun-ai-shared-20260712",
+          "deletionPolicy": "PREVENT"
+        }
+      },
+      "newState": {
+        "urn": "urn:pulumi:foundation::windrun-ai::gcp:organizations/project:Project::shared-project",
+        "type": "gcp:organizations/project:Project",
+        "custom": true,
+        "inputs": {
+          "projectId": "windrun-ai-shared-20260712",
+          "deletionPolicy": "DELETE"
+        }
+      },
+      "diffReasons": ["deletionPolicy"],
+      "detailedDiff": {
+        "deletionPolicy": {
+          "kind": "update",
+          "inputDiff": true
+        }
+      }
+    },
+    {
+      "op": "update",
+      "urn": "urn:pulumi:foundation::windrun-ai::gcp:organizations/project:Project::staging-project",
+      "oldState": {
+        "urn": "urn:pulumi:foundation::windrun-ai::gcp:organizations/project:Project::staging-project",
+        "type": "gcp:organizations/project:Project",
+        "custom": true,
+        "id": "projects/windrun-ai-staging-20260712",
+        "protect": true,
+        "inputs": {
+          "projectId": "windrun-ai-staging-20260712",
+          "deletionPolicy": "PREVENT"
+        },
+        "outputs": {
+          "projectId": "windrun-ai-staging-20260712",
+          "deletionPolicy": "PREVENT"
+        }
+      },
+      "newState": {
+        "urn": "urn:pulumi:foundation::windrun-ai::gcp:organizations/project:Project::staging-project",
+        "type": "gcp:organizations/project:Project",
+        "custom": true,
+        "inputs": {
+          "projectId": "windrun-ai-staging-20260712",
+          "deletionPolicy": "DELETE"
+        }
+      },
+      "diffReasons": ["deletionPolicy"],
+      "detailedDiff": {
+        "deletionPolicy": {
+          "kind": "update",
+          "inputDiff": true
+        }
+      }
+    },
+    {
+      "op": "update",
+      "urn": "urn:pulumi:foundation::windrun-ai::gcp:organizations/project:Project::production-project",
+      "oldState": {
+        "urn": "urn:pulumi:foundation::windrun-ai::gcp:organizations/project:Project::production-project",
+        "type": "gcp:organizations/project:Project",
+        "custom": true,
+        "id": "projects/windrun-ai-prod-20260712",
+        "protect": true,
+        "inputs": {
+          "projectId": "windrun-ai-prod-20260712",
+          "deletionPolicy": "PREVENT"
+        },
+        "outputs": {
+          "projectId": "windrun-ai-prod-20260712",
+          "deletionPolicy": "PREVENT"
+        }
+      },
+      "newState": {
+        "urn": "urn:pulumi:foundation::windrun-ai::gcp:organizations/project:Project::production-project",
+        "type": "gcp:organizations/project:Project",
+        "custom": true,
+        "inputs": {
+          "projectId": "windrun-ai-prod-20260712",
+          "deletionPolicy": "DELETE"
+        }
+      },
+      "diffReasons": ["deletionPolicy"],
+      "detailedDiff": {
+        "deletionPolicy": {
+          "kind": "update",
+          "inputDiff": true
+        }
+      }
+    },
+    {
+      "op": "same",
+      "urn": "urn:pulumi:foundation::windrun-ai::gcp:dns/managedZone:ManagedZone::shared-zone",
+      "oldState": {
+        "urn": "urn:pulumi:foundation::windrun-ai::gcp:dns/managedZone:ManagedZone::shared-zone",
+        "type": "gcp:dns/managedZone:ManagedZone",
+        "custom": true,
+        "id": "shared-zone-id",
+        "protect": true,
+        "inputs": {
+          "project": "windrun-ai-shared-20260712",
+          "name": "app-windrun-ai"
+        },
+        "outputs": {
+          "project": "windrun-ai-shared-20260712",
+          "name": "app-windrun-ai"
+        }
+      },
+      "newState": {
+        "urn": "urn:pulumi:foundation::windrun-ai::gcp:dns/managedZone:ManagedZone::shared-zone",
+        "type": "gcp:dns/managedZone:ManagedZone",
+        "custom": true,
+        "inputs": {
+          "project": "windrun-ai-shared-20260712",
+          "name": "app-windrun-ai"
+        }
+      },
+      "detailedDiff": null
+    }
+  ],
+  "changeSummary": {
+    "same": 2,
+    "update": 3
+  }
+}

@@ -36,6 +36,24 @@ const PROJECT_IDS = Object.freeze([
 ])
 const PLATFORM_REFUSAL =
   'REFUSED: pass --destroy-projects to acknowledge deletion of all three GCP projects'
+const PULUMI_FIXTURE_DIRECTORY = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  'fixtures',
+)
+const CANONICAL_FOUNDATION_CHECKPOINT = readFileSync(
+  resolve(
+    PULUMI_FIXTURE_DIRECTORY,
+    'pulumi-v3.244-foundation-checkpoint.json',
+  ),
+  'utf8',
+)
+const CANONICAL_FOUNDATION_PREVIEW = readFileSync(
+  resolve(
+    PULUMI_FIXTURE_DIRECTORY,
+    'pulumi-v3.244-foundation-preview.json',
+  ),
+  'utf8',
+)
 
 function commandText(executable, args) {
   return [executable, ...args].join(' ')
@@ -607,11 +625,12 @@ function platformStackState(stack, resources = []) {
 }
 
 function platformResource(stack, type, name, inputs, protect = true) {
+  const isProject = type === 'gcp:organizations/project:Project'
   const resource = {
     urn: stackUrn(stack, type, name),
     type,
     custom: true,
-    id: `${name}-id`,
+    id: isProject ? `projects/${inputs.projectId}` : `${name}-id`,
     inputs: cloneJson(inputs),
     outputs: cloneJson(inputs),
   }
@@ -765,6 +784,9 @@ function createPlatformHarness() {
     transitionState: transitionedFoundationState(),
     recoveryState: normalFoundationState(),
     googleIdentityFailureAt: undefined,
+    updateInProgress: new Map(),
+    afterDeliveryDisableUp: undefined,
+    afterFoundationDestroy: undefined,
     githubStatus:
       'github.com\n  ✓ Logged in to github.com account rohanprabhu\n  - Active account: true\n',
   }
@@ -808,7 +830,14 @@ function createPlatformHarness() {
     if (args[0] === 'stack' && args[1] === 'ls') {
       return {
         stdout: JSON.stringify(
-          [...stackStates.keys()].map((name) => ({ name })),
+          [...stackStates.keys()].map((name) => {
+            const entry = { name }
+            if (controls.updateInProgress.has(name)) {
+              entry.updateInProgress =
+                controls.updateInProgress.get(name)
+            }
+            return entry
+          }),
         ),
         stderr: '',
       }
@@ -859,6 +888,16 @@ function createPlatformHarness() {
       if (!controls.keepAfterDestroy.has(reference)) {
         stackStates.delete(reference)
       }
+      if (
+        reference === refs.foundation &&
+        controls.afterFoundationDestroy
+      ) {
+        await controls.afterFoundationDestroy({
+          controls,
+          refs,
+          stackStates,
+        })
+      }
       const isDelivery = reference === refs.delivery
       return {
         stdout: isDelivery
@@ -873,6 +912,13 @@ function createPlatformHarness() {
       (args[0] === 'preview' || args[0] === 'up') &&
       args.at(-1) === refs.delivery
     ) {
+      if (args[0] === 'up' && controls.afterDeliveryDisableUp) {
+        await controls.afterDeliveryDisableUp({
+          controls,
+          refs,
+          stackStates,
+        })
+      }
       return {
         stdout: `provider output ${PULUMI_TOKEN} ${GITHUB_TOKEN}\n`,
         stderr: `provider warning ${GITHUB_TOKEN} ${PULUMI_TOKEN}\n`,
@@ -1143,6 +1189,251 @@ test('full teardown enforces exact stack, CI-disable, identity, and foundation o
   assert.match(harness.logs.at(-1), /permanently unavailable/u)
 })
 
+test('full teardown accepts canonical Pulumi v3.244 checkpoint and PreviewDigest JSON', async () => {
+  const harness = createPlatformHarness()
+  harness.stackStates.set(
+    harness.refs.foundation,
+    JSON.parse(CANONICAL_FOUNDATION_CHECKPOINT),
+  )
+  harness.controls.transitionPreview = CANONICAL_FOUNDATION_PREVIEW
+
+  const result = await executeFullPlatformDestroy(harness)
+
+  assert.equal(result.status, 'DELETE_REQUESTED')
+})
+
+test('full teardown accepts omitted safe digest fields and null same-step diffs', async () => {
+  const harness = createPlatformHarness()
+  const preview = JSON.parse(foundationTransitionPreview())
+  delete preview.diagnostics
+  delete preview.maybeCorrupt
+  for (const step of preview.steps) {
+    if (step.op === 'same') step.detailedDiff = null
+  }
+  const root = preview.steps.find(
+    ({ oldState }) => oldState.type === 'pulumi:pulumi:Stack',
+  )
+  delete root.oldState.inputs
+  delete root.oldState.outputs
+  delete root.newState.inputs
+  delete root.newState.outputs
+  harness.controls.transitionPreview = JSON.stringify(preview)
+
+  const result = await executeFullPlatformDestroy(harness)
+
+  assert.equal(result.status, 'DELETE_REQUESTED')
+})
+
+test('full teardown rejects malformed present digest fields', async () => {
+  for (const mutate of [
+    (preview) => {
+      preview.maybeCorrupt = null
+    },
+    (preview) => {
+      preview.diagnostics = null
+    },
+    (preview) => {
+      preview.steps.find(({ op }) => op === 'same').detailedDiff = 'bad'
+    },
+  ]) {
+    const harness = createPlatformHarness()
+    const preview = JSON.parse(foundationTransitionPreview())
+    mutate(preview)
+    harness.controls.transitionPreview = JSON.stringify(preview)
+
+    await assert.rejects(
+      executeFullPlatformDestroy(harness),
+      /foundation preview/,
+    )
+    assert.equal(harness.foundationUpCount, 0)
+  }
+})
+
+test('full teardown rejects active or malformed stack updates before mutation', async () => {
+  for (const updateInProgress of [true, 'true']) {
+    const harness = createPlatformHarness()
+    harness.stackStates.set(
+      harness.refs.production,
+      platformStackState('production'),
+    )
+    harness.controls.updateInProgress.set(
+      harness.refs.production,
+      updateInProgress,
+    )
+
+    await assert.rejects(
+      executeFullPlatformDestroy(harness),
+      /production.*updateInProgress/,
+    )
+    assert.equal(
+      harness.events.some((event) => event.startsWith('destroy:')),
+      false,
+    )
+  }
+})
+
+test('full teardown accepts explicit updateInProgress false', async () => {
+  const harness = createPlatformHarness()
+  for (const reference of harness.stackStates.keys()) {
+    harness.controls.updateInProgress.set(reference, false)
+  }
+
+  const result = await executeFullPlatformDestroy(harness)
+
+  assert.equal(result.status, 'DELETE_REQUESTED')
+})
+
+test('full teardown closes the app gate after delivery disable and before delivery destroy', async () => {
+  const harness = createPlatformHarness()
+  harness.controls.afterDeliveryDisableUp = ({ refs, stackStates }) => {
+    stackStates.set(
+      refs.production,
+      platformStackState('production', [
+        platformResource(
+          'production',
+          'gcp:cloudrunv2/service:Service',
+          'late-production',
+          { name: 'late-production' },
+          false,
+        ),
+      ]),
+    )
+  }
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /production still contains non-root resources/,
+  )
+
+  assert.equal(
+    harness.events.includes(`destroy:${harness.refs.delivery}`),
+    false,
+  )
+  assert.equal(
+    harness.providerEnvironmentRefs.every(
+      (environment) =>
+        !('PULUMI_ACCESS_TOKEN' in environment) &&
+        !('GITHUB_TOKEN' in environment),
+    ),
+    true,
+  )
+})
+
+test('full teardown rejects a root-only active update after delivery disable', async () => {
+  const harness = createPlatformHarness()
+  harness.controls.afterDeliveryDisableUp = ({
+    controls,
+    refs,
+    stackStates,
+  }) => {
+    stackStates.set(
+      refs['production-edge'],
+      platformStackState('production-edge'),
+    )
+    controls.updateInProgress.set(refs['production-edge'], true)
+  }
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /production-edge.*updateInProgress/,
+  )
+  assert.equal(
+    harness.events.includes(`destroy:${harness.refs.delivery}`),
+    false,
+  )
+})
+
+test('full teardown validates provider-bound project identity before transition', async () => {
+  const harness = createPlatformHarness()
+  const project = harness.stackStates
+    .get(harness.refs.foundation)
+    .deployment.resources.find(
+      ({ type }) => type === 'gcp:organizations/project:Project',
+    )
+  project.id = 'unexpected-project'
+  project.outputs.projectId = 'unexpected-project'
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /foundation pre-transition state has unexpected project state/,
+  )
+  assert.equal(harness.events.includes('foundation-config:true'), false)
+})
+
+test('full teardown carries project identity through the transition preview', async () => {
+  const harness = createPlatformHarness()
+  const preview = JSON.parse(foundationTransitionPreview())
+  const projectStep = preview.steps.find(
+    ({ oldState }) =>
+      oldState.type === 'gcp:organizations/project:Project',
+  )
+  projectStep.newState.id = 'unexpected-project'
+  harness.controls.transitionPreview = JSON.stringify(preview)
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /foundation preview contained an unexpected project identity/,
+  )
+  assert.equal(harness.foundationUpCount, 0)
+})
+
+test('full teardown final gate rejects a recreated earlier stack', async () => {
+  const harness = createPlatformHarness()
+  harness.controls.afterFoundationDestroy = ({ refs, stackStates }) => {
+    stackStates.set(
+      refs.staging,
+      platformStackState('staging', [
+        platformResource(
+          'staging',
+          'gcp:cloudrunv2/service:Service',
+          'late-staging',
+          { name: 'late-staging' },
+          false,
+        ),
+      ]),
+    )
+  }
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /staging still contains non-root resources/,
+  )
+  assert.equal(
+    harness.logs.some((message) => message.includes('DELETE_REQUESTED')),
+    false,
+  )
+  assert.equal(harness.foundationUpCount, 1)
+  assert.equal(
+    harness.events.some(
+      (event) => event === 'foundation-config:false',
+    ),
+    false,
+  )
+})
+
+test('full teardown requires foundation absence after destroy --remove', async () => {
+  const harness = createPlatformHarness()
+  harness.controls.afterFoundationDestroy = ({ refs, stackStates }) => {
+    stackStates.set(refs.foundation, platformStackState('foundation'))
+  }
+
+  await assert.rejects(
+    executeFullPlatformDestroy(harness),
+    /foundation stack still exists after destroy --remove/,
+  )
+  assert.equal(
+    harness.logs.some((message) => message.includes('DELETE_REQUESTED')),
+    false,
+  )
+  assert.equal(harness.foundationUpCount, 1)
+  assert.equal(
+    harness.events.some(
+      (event) => event === 'foundation-config:false',
+    ),
+    false,
+  )
+})
+
 test('wrong Google identity causes zero Pulumi mutation', async () => {
   const harness = createPlatformHarness()
   harness.controls.googleIdentityFailureAt = 1
@@ -1408,6 +1699,8 @@ test('full teardown documentation records every destructive and recovery boundar
     'gcloud auth list --filter=status:ACTIVE --format=value(account)',
     'gcloud auth application-default print-access-token',
     'no mutating `gcloud`, `doctl`, or `gh`',
+    'updateInProgress',
+    '`foundation` stack is absent',
   ]) {
     assert.ok(document.includes(text), `missing teardown text: ${text}`)
   }

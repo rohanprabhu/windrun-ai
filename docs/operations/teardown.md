@@ -40,7 +40,7 @@ The dependency order is fixed:
 6. `delivery`
 7. `foundation`
 
-The script inventories only fully qualified Pulumi stack names. It verifies the preview, application, and edge stacks are absent or empty after their destroys and repeats that inventory immediately before the foundation transition. Any malformed, pending, corrupt, duplicate, protected, or otherwise unexpected state stops the operation.
+The script inventories only fully qualified Pulumi stack names and rejects either `updateInProgress: true` or a malformed `updateInProgress` value. It verifies the preview, application, and edge stacks are absent or empty after their destroys, repeats that gate after the delivery-disable update and before delivery destroy, repeats it immediately before the foundation transition, and checks it again after foundation destroy. Any malformed, pending, corrupt, duplicate, protected, or otherwise unexpected state stops the operation.
 
 ## Delivery and credential boundary
 
@@ -73,4 +73,4 @@ Only after the preview passes and is displayed does the script run foundation `u
 
 If a failure may have occurred after the deletion transition began but before foundation is fully destroyed, the script re-verifies both Google identities, resets `windrun-ai:allowProjectDeletion=false`, previews recovery, and applies foundation again. It then requires every surviving resource to be protected and all three project policies restored to `PREVENT` before returning the original failure. If even recovery state is unexpected, the script fails closed and reports the recovery failure as well.
 
-After a successful foundation destroy, all three projects enter `DELETE_REQUESTED`. Google provides a 30-day recovery window, but the project IDs are permanently unavailable for reuse by a different project.
+Success is reported only after a final fully qualified inventory proves all earlier stacks remain absent or empty and the `foundation` stack is absent after `destroy --remove`. After that successful foundation destroy, all three projects enter `DELETE_REQUESTED`. Google provides a 30-day recovery window, but the project IDs are permanently unavailable for reuse by a different project.
