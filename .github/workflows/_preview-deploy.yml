@@ -1,0 +1,101 @@
+name: Deploy pull request preview
+on:
+  workflow_call:
+    inputs:
+      pr-number:
+        type: number
+        required: true
+      merge-sha:
+        type: string
+        required: true
+      preview-url:
+        type: string
+        required: true
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'opened' ||
+       github.event.action == 'reopened' ||
+       github.event.action == 'synchronize') &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.base.repo.id == github.event.repository.id &&
+      github.event.pull_request.head.repo.id == github.event.repository.id &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      inputs.pr-number == github.event.pull_request.number &&
+      inputs.merge-sha == github.event.pull_request.merge_commit_sha &&
+      inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    concurrency:
+      group: windrun-preview-${{ inputs.pr-number }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out trusted platform
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: refs/heads/main
+          path: platform
+          persist-credentials: false
+      - name: Check out preview application source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.merge-sha }}
+          path: source
+          persist-credentials: false
+      - uses: ./platform/.github/actions/setup
+        with:
+          working-directory: platform
+      - uses: ./platform/.github/actions/auth-cloud
+        with:
+          pulumi-organization: ${{ vars.PULUMI_ORGANIZATION }}
+          gcp-project-id: windrun-ai-staging-20260712
+          workload-identity-provider: ${{ vars.GCP_WIF_PROVIDER_PREVIEW }}
+          service-account: ${{ vars.GCP_SERVICE_ACCOUNT_PREVIEW }}
+      - uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        env:
+          WINDRUN_APP_SOURCE: ${{ github.workspace }}/source
+        with:
+          command: preview
+          stack-name: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/pr-${{ inputs.pr-number }}
+          work-dir: platform/infra
+          upsert: true
+          config-map: |
+            windrun-ai:stackKind:
+              value: preview
+            windrun-ai:pullRequestNumber:
+              value: ${{ inputs.pr-number }}
+            windrun-ai:gitCommitSha:
+              value: ${{ inputs.merge-sha }}
+      - id: up
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        env:
+          WINDRUN_APP_SOURCE: ${{ github.workspace }}/source
+        with:
+          command: up
+          stack-name: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/pr-${{ inputs.pr-number }}
+          work-dir: platform/infra
+          upsert: true
+          config-map: |
+            windrun-ai:stackKind:
+              value: preview
+            windrun-ai:pullRequestNumber:
+              value: ${{ inputs.pr-number }}
+            windrun-ai:gitCommitSha:
+              value: ${{ inputs.merge-sha }}
+      - id: smoke
+        run: node platform/scripts/ci/smoke-test.mjs "${{ inputs.preview-url }}/api/health" --attempts 30 --delay-ms 10000
+      - name: Update preview comment
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PREVIEW_STATE: ${{ steps.up.outcome == 'success' && steps.smoke.outcome == 'success' && 'ready' || 'failed' }}
+          PREVIEW_URL: ${{ inputs.preview-url }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node platform/scripts/ci/upsert-preview-comment.mjs

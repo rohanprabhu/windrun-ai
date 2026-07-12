@@ -1,0 +1,50 @@
+name: Pull request
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, closed]
+permissions:
+  contents: read
+jobs:
+  quality:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm ci:validate-contract
+      - run: pnpm ci:quality
+  deploy-preview:
+    needs: quality
+    if: >-
+      needs.quality.result == 'success' &&
+      vars.PULUMI_CI_ENABLED == 'true' &&
+      github.event.pull_request.head.repo.id == github.event.repository.id &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: rohanprabhu/windrun-ai/.github/workflows/_preview-deploy.yml@main
+    with:
+      pr-number: ${{ github.event.pull_request.number }}
+      merge-sha: ${{ github.event.pull_request.merge_commit_sha }}
+      preview-url: https://pr-${{ github.event.pull_request.number }}.staging.app.windrun.ai
+  destroy-preview:
+    if: >-
+      github.event.action == 'closed' &&
+      vars.PULUMI_CI_ENABLED == 'true' &&
+      github.event.pull_request.head.repo.id == github.event.repository.id &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    uses: rohanprabhu/windrun-ai/.github/workflows/_preview-destroy.yml@main
+    with:
+      pr-number: ${{ github.event.pull_request.number }}
+      base-sha: ${{ github.event.pull_request.base.sha }}
+      preview-url: https://pr-${{ github.event.pull_request.number }}.staging.app.windrun.ai

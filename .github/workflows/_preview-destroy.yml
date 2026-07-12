@@ -1,0 +1,65 @@
+name: Destroy pull request preview
+on:
+  workflow_call:
+    inputs:
+      pr-number:
+        type: number
+        required: true
+      base-sha:
+        type: string
+        required: true
+      preview-url:
+        type: string
+        required: true
+jobs:
+  destroy:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.base.repo.id == github.event.repository.id &&
+      github.event.pull_request.head.repo.id == github.event.repository.id &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      inputs.pr-number == github.event.pull_request.number &&
+      inputs.base-sha == github.event.pull_request.base.sha &&
+      inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    concurrency:
+      group: windrun-preview-${{ inputs.pr-number }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out trusted platform
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: refs/heads/main
+          path: platform
+          persist-credentials: false
+      - uses: ./platform/.github/actions/setup
+        with:
+          working-directory: platform
+      - uses: ./platform/.github/actions/auth-cloud
+        with:
+          pulumi-organization: ${{ vars.PULUMI_ORGANIZATION }}
+          gcp-project-id: windrun-ai-staging-20260712
+          workload-identity-provider: ${{ vars.GCP_WIF_PROVIDER_PREVIEW }}
+          service-account: ${{ vars.GCP_SERVICE_ACCOUNT_PREVIEW }}
+      - name: Install Pulumi
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        with:
+          work-dir: platform/infra
+      - id: destroy
+        run: node platform/scripts/ci/destroy-preview.mjs "${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/pr-${{ inputs.pr-number }}"
+      - name: Update preview comment
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PREVIEW_STATE: destroyed
+          PREVIEW_URL: ${{ inputs.preview-url }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node platform/scripts/ci/upsert-preview-comment.mjs

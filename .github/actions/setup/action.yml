@@ -1,5 +1,10 @@
 name: Setup Windrun
 description: Install Node and the repository-pinned pnpm dependencies
+inputs:
+  working-directory:
+    description: Directory containing the pnpm workspace
+    required: false
+    default: .
 runs:
   using: composite
   steps:
@@ -9,4 +14,5 @@ runs:
     - shell: bash
       run: corepack enable
     - shell: bash
+      working-directory: ${{ inputs.working-directory }}
       run: pnpm install --frozen-lockfile
