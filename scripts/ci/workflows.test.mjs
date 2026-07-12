@@ -353,6 +353,12 @@ test('preview deploy revalidates immutable event data before trusted steps', () 
     (step) => step.uses === './platform/.github/actions/auth-cloud',
   )
   assert.ok(authIndex > job.steps.indexOf(checkouts[1]))
+  assert.deepEqual(job.steps[authIndex].with, {
+    'pulumi-organization': '${{ vars.PULUMI_ORGANIZATION }}',
+    'gcp-project-id': 'windrun-ai-staging-20260712',
+    'workload-identity-provider': '${{ vars.GCP_WIF_PROVIDER_PREVIEW }}',
+    'service-account': '${{ vars.GCP_SERVICE_ACCOUNT_PREVIEW }}',
+  })
   assert.equal(job.steps.some((step) => step.uses?.startsWith('./source')), false)
   assert.equal(
     job.steps.some((step) => step['working-directory'] === 'source'),
@@ -437,6 +443,12 @@ test('preview destroy shares the queue and runs only trusted main code', () => {
     (step) => step.uses === './platform/.github/actions/auth-cloud',
   )
   assert.ok(authIndex > job.steps.indexOf(checkouts[0]))
+  assert.deepEqual(job.steps[authIndex].with, {
+    'pulumi-organization': '${{ vars.PULUMI_ORGANIZATION }}',
+    'gcp-project-id': 'windrun-ai-staging-20260712',
+    'workload-identity-provider': '${{ vars.GCP_WIF_PROVIDER_PREVIEW }}',
+    'service-account': '${{ vars.GCP_SERVICE_ACCOUNT_PREVIEW }}',
+  })
   const installPulumi = job.steps.find((step) => step.uses === pulumiAction)
   assert.ok(installPulumi)
   assert.equal(installPulumi.with?.command, undefined)
