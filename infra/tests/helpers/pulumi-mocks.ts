@@ -24,8 +24,18 @@ export interface CapturedResource {
 }
 
 export const capturedResources: CapturedResource[] = [];
+export const capturedCalls: Array<{
+  token: string;
+  inputs: Record<string, unknown>;
+  provider?: string;
+}> = [];
 
 let activeStack = "test";
+let activeDigitalOceanRecords: Array<{
+  type: string;
+  value: string;
+  tag?: string;
+}> = [];
 const pendingDependencies = new Map<string, string[]>();
 const patchKey = Symbol.for("windrun-ai:pulumi-mock-dependencies");
 
@@ -79,6 +89,14 @@ function resourceState(args: MockResourceArgs) {
           },
         ],
       };
+    case "gcp:certificatemanager/certificate:Certificate":
+      return {
+        ...state,
+        managed: {
+          ...(state.managed as Record<string, unknown>),
+          state: "ACTIVE",
+        },
+      };
     case "gcp:compute/globalAddress:GlobalAddress":
       return {
         ...state,
@@ -112,15 +130,26 @@ function callResult(args: MockCallArgs) {
         region: "asia-south1",
       };
     case "digitalocean:index/getRecords:getRecords":
-      return { records: [] };
+      return { records: activeDigitalOceanRecords };
     default:
       return args.inputs;
   }
 }
 
-export async function setWindrunMocks(stack = "test") {
+export async function setWindrunMocks(
+  stack = "test",
+  options: {
+    digitalOceanRecords?: Array<{
+      type: string;
+      value: string;
+      tag?: string;
+    }>;
+  } = {},
+) {
   activeStack = stack;
+  activeDigitalOceanRecords = options.digitalOceanRecords ?? [];
   capturedResources.length = 0;
+  capturedCalls.length = 0;
   pendingDependencies.clear();
 
   await pulumi.runtime.setMocks(
@@ -141,7 +170,14 @@ export async function setWindrunMocks(stack = "test") {
           state: resourceState(args),
         };
       },
-      call: callResult,
+      call(args) {
+        capturedCalls.push({
+          token: args.token,
+          inputs: args.inputs,
+          provider: args.provider || undefined,
+        });
+        return callResult(args);
+      },
     },
     "windrun-ai",
     stack,
