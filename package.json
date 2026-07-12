@@ -1,0 +1,11 @@
+{
+	"scripts": {
+		"dev": "pnpm -C windrun-ai dev",
+		"build": "pnpm -C windrun-ai build",
+		"lint": "pnpm -C windrun-ai lint",
+		"preview": "pnpm -C windrun-ai preview"
+	},
+	"dependencies": {
+		"@tanstack/react-router": "^1.135.2"
+	}
+}
