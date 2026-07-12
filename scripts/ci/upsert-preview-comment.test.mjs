@@ -74,12 +74,13 @@ function githubComment({
   }
 }
 
-function jsonResponse(payload, status = 200) {
+function jsonResponse(payload, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: {
       'content-type': 'application/json; charset=utf-8',
       'x-github-api-version-selected': '2022-11-28',
+      ...extraHeaders,
     },
   })
 }
@@ -110,7 +111,7 @@ test('creates one preview comment when the marker is absent', async () => {
   assert.equal(calls.length, 2)
   assert.equal(
     calls[0].url,
-    `https://api.github.com/repos/${repository}/issues/${pullNumber}/comments`,
+    `https://api.github.com/repos/${repository}/issues/${pullNumber}/comments?per_page=100`,
   )
   assert.equal(calls[0].init.method, 'GET')
   assert.deepEqual(calls[0].init.headers, {
@@ -118,7 +119,10 @@ test('creates one preview comment when the marker is absent', async () => {
     authorization: `Bearer ${token}`,
     'x-github-api-version': '2022-11-28',
   })
-  assert.equal(calls[1].url, calls[0].url)
+  assert.equal(
+    calls[1].url,
+    `https://api.github.com/repos/${repository}/issues/${pullNumber}/comments`,
+  )
   assert.equal(calls[1].init.method, 'POST')
   assert.deepEqual(JSON.parse(calls[1].init.body), {
     body:
@@ -174,6 +178,119 @@ test('updates the existing preview comment when the marker is present', async ()
     ...calls[0].init.headers,
     'content-type': 'application/json',
   })
+})
+
+test('finds a bot marker on a later page and patches without posting', async () => {
+  const calls = []
+  const firstPageUrl =
+    `https://api.github.com/repos/${repository}/issues/${pullNumber}/comments?per_page=100`
+  const secondPageUrl = `${firstPageUrl}&page=2`
+  const existingComment = githubComment({
+    id: 250,
+    body: '<!-- windrun-preview -->\nAn older paginated preview status',
+  })
+  const responses = [
+    jsonResponse([], 200, {
+      link: `<${secondPageUrl}>; rel="next", <${secondPageUrl}>; rel="last"`,
+    }),
+    jsonResponse([existingComment]),
+    jsonResponse(existingComment),
+  ]
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init })
+    return responses.shift()
+  }
+
+  await upsertPreviewComment({
+    token,
+    repository,
+    pullNumber,
+    state: 'ready',
+    previewUrl,
+    runUrl,
+    fetchImpl,
+  })
+
+  assert.deepEqual(
+    calls.map(({ url, init }) => [init.method, url]),
+    [
+      ['GET', firstPageUrl],
+      ['GET', secondPageUrl],
+      [
+        'PATCH',
+        `https://api.github.com/repos/${repository}/issues/comments/250`,
+      ],
+    ],
+  )
+  assert.equal(calls.some(({ init }) => init.method === 'POST'), false)
+})
+
+test('never forwards the GitHub token to an off-origin pagination URL', async () => {
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init })
+    return jsonResponse([], 200, {
+      link: '<https://attacker.invalid/collect>; rel="next"',
+    })
+  }
+
+  await assert.rejects(
+    upsertPreviewComment({
+      token,
+      repository,
+      pullNumber,
+      state: 'ready',
+      previewUrl,
+      runUrl,
+      fetchImpl,
+    }),
+    /GitHub API GET pagination URL left the comments endpoint/,
+  )
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url.startsWith('https://api.github.com/'), true)
+})
+
+test('sanitizes comment-list JSON failures and rejects non-arrays', async () => {
+  const privateBody = `private-response-containing-${token}`
+  const rejectingFetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    async json() {
+      throw new Error(privateBody)
+    },
+  })
+
+  await assert.rejects(
+    upsertPreviewComment({
+      token,
+      repository,
+      pullNumber,
+      state: 'ready',
+      previewUrl,
+      runUrl,
+      fetchImpl: rejectingFetch,
+    }),
+    (error) => {
+      assert.equal(error.message, 'GitHub API GET returned invalid JSON')
+      assert.equal(error.message.includes(token), false)
+      assert.equal(error.message.includes(privateBody), false)
+      return true
+    },
+  )
+
+  await assert.rejects(
+    upsertPreviewComment({
+      token,
+      repository,
+      pullNumber,
+      state: 'ready',
+      previewUrl,
+      runUrl,
+      fetchImpl: async () => jsonResponse({ not: 'an array' }),
+    }),
+    /GitHub API GET must return a comment array/,
+  )
 })
 
 test('leaves a different bot comment untouched', async () => {

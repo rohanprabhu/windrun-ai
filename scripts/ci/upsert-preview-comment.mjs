@@ -55,6 +55,87 @@ function commentBody(state, previewUrl, runUrl) {
   }
 }
 
+function nextPageUrl(response) {
+  const link = response.headers?.get?.('link')
+  if (!link) return undefined
+
+  for (const entry of link.split(',')) {
+    const match = entry.match(/^\s*<([^>]+)>\s*;\s*rel="([^"]+)"/u)
+    if (match?.[2].split(/\s+/u).includes('next')) {
+      return match[1]
+    }
+  }
+  return undefined
+}
+
+function previewMarkerComment(comments) {
+  return comments.find(
+    (comment) =>
+      comment.user?.login === 'github-actions[bot]' &&
+      comment.user?.type === 'Bot' &&
+      typeof comment.body === 'string' &&
+      comment.body.includes(marker),
+  )
+}
+
+async function findPreviewComment(fetchImpl, initialUrl, headers) {
+  const visited = new Set()
+  const endpoint = new URL(initialUrl)
+  let pageUrl = initialUrl
+
+  while (pageUrl) {
+    if (visited.has(pageUrl)) {
+      throw new Error('GitHub API GET pagination repeated a URL')
+    }
+    visited.add(pageUrl)
+
+    const response = await request(fetchImpl, pageUrl, {
+      method: 'GET',
+      headers,
+    })
+    if (!response.ok) {
+      throw new Error(`GitHub API GET failed with status ${response.status}`)
+    }
+
+    let comments
+    try {
+      comments = await response.json()
+    } catch {
+      throw new Error('GitHub API GET returned invalid JSON')
+    }
+    if (!Array.isArray(comments)) {
+      throw new Error('GitHub API GET must return a comment array')
+    }
+
+    const existing = previewMarkerComment(comments)
+    if (existing) return existing
+    const next = nextPageUrl(response)
+    if (!next) {
+      pageUrl = undefined
+      continue
+    }
+    let nextUrl
+    try {
+      nextUrl = new URL(next)
+    } catch {
+      throw new Error(
+        'GitHub API GET pagination URL left the comments endpoint',
+      )
+    }
+    if (
+      nextUrl.origin !== endpoint.origin ||
+      nextUrl.pathname !== endpoint.pathname
+    ) {
+      throw new Error(
+        'GitHub API GET pagination URL left the comments endpoint',
+      )
+    }
+    pageUrl = nextUrl.href
+  }
+
+  return undefined
+}
+
 export async function upsertPreviewComment({
   token,
   repository,
@@ -70,22 +151,10 @@ export async function upsertPreviewComment({
     authorization: `Bearer ${token}`,
     'x-github-api-version': '2022-11-28',
   }
-  const listResponse = await request(fetchImpl, commentsUrl, {
-    method: 'GET',
+  const existingComment = await findPreviewComment(
+    fetchImpl,
+    `${commentsUrl}?per_page=100`,
     headers,
-  })
-
-  if (!listResponse.ok) {
-    throw new Error(`GitHub API GET failed with status ${listResponse.status}`)
-  }
-
-  const comments = await listResponse.json()
-  const existingComment = comments.find(
-    (comment) =>
-      comment.user?.login === 'github-actions[bot]' &&
-      comment.user?.type === 'Bot' &&
-      typeof comment.body === 'string' &&
-      comment.body.includes(marker),
   )
 
   const body = commentBody(state, previewUrl, runUrl)
