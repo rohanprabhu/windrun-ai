@@ -209,6 +209,54 @@ test('runPulumi uses and removes an isolated gcloud Docker credential-helper con
   assert.equal(existsSync(dockerConfigPath), false)
 })
 
+test('mutating runPulumi uses a temporary Artifact Registry OAuth Docker config', async () => {
+  const calls = []
+  let dockerConfigPath
+  const accessToken = 'registry-access-token-fixture'
+  const expectedAuth = Buffer.from(
+    `oauth2accesstoken:${accessToken}`,
+  ).toString('base64')
+  const operations = createPulumiOperations({
+    environment: {
+      PATH: process.env.PATH,
+      DOCKER_CONFIG: '/untrusted/operator/docker-config',
+    },
+    repositoryRoot: '/workspace/windrun-ai',
+    async processRunner(executable, args, options) {
+      calls.push({ executable, args: [...args], env: { ...options.env } })
+      if (
+        executable === 'gcloud' &&
+        args.join(' ') === 'auth application-default print-access-token'
+      ) {
+        return { stdout: `${accessToken}\n`, stderr: '' }
+      }
+      dockerConfigPath = options.env.DOCKER_CONFIG
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(dockerConfigPath, 'config.json'), 'utf8')),
+        {
+          auths: {
+            'asia-south1-docker.pkg.dev': {
+              auth: expectedAuth,
+            },
+          },
+        },
+      )
+      return { stdout: '', stderr: '' }
+    },
+  })
+
+  await operations.runPulumi(['up', '--yes', '--stack', 'org/windrun-ai/staging'])
+
+  assert.deepEqual(
+    calls.map(({ executable, args }) => [executable, ...args]),
+    [
+      ['gcloud', 'auth', 'application-default', 'print-access-token'],
+      ['pulumi', 'up', '--yes', '--stack', 'org/windrun-ai/staging'],
+    ],
+  )
+  assert.equal(existsSync(dockerConfigPath), false)
+})
+
 test('production refuses a PULUMI_BIN whose basename is not pulumi', async () => {
   const operations = createPulumiOperations({
     environment: {
@@ -278,6 +326,9 @@ test('runPulumi classifies read-only timeouts separately from unknown mutations'
     environment: { PATH: process.env.PATH },
     async processRunner(_executable, args, options) {
       classifications.push({ args: [...args], unknown: options.mutationMayHaveStarted })
+      if (args.join(' ') === 'auth application-default print-access-token') {
+        return { stdout: 'registry-access-token\n', stderr: '' }
+      }
       if (options.mutationMayHaveStarted) {
         throw new PulumiMutationStateUnknownError()
       }
@@ -312,7 +363,9 @@ test('runPulumi classifies read-only timeouts separately from unknown mutations'
     })
   }
   assert.deepEqual(
-    classifications.map(({ unknown }) => unknown),
+    classifications
+      .filter(({ args }) => args[0] !== 'auth')
+      .map(({ unknown }) => unknown),
     [false, false, false, false, true, true, true, true, true],
   )
 })
@@ -376,7 +429,7 @@ test('destroyAndRemove uses one exact Pulumi destroy/remove command', async () =
 
   await operations.destroyAndRemove(stack)
 
-  assert.deepEqual(harness.calls[0].args, [
+  assert.deepEqual(harness.calls.at(-1).args, [
     'destroy',
     '--yes',
     '--remove',
@@ -591,6 +644,7 @@ test('bootstrap previews and applies the five pre-claim stacks in exact order th
   const bin = join(root, 'bin')
   const logPath = join(root, 'pulumi.log')
   const pulumiPath = join(bin, 'pulumi')
+  const gcloudPath = join(bin, 'gcloud')
   const events = []
   const messages = []
 
@@ -605,6 +659,14 @@ const { appendFileSync } = require('node:fs')
 appendFileSync(process.env.PULUMI_FAKE_LOG, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }) + '\\n')
 if (process.argv.slice(2).join(' ') === 'whoami --json') {
   process.stdout.write(${JSON.stringify(`${JSON.stringify({ user: LOGIN, url: MANAGED_APP_BACKEND })}\n`)})
+}
+`,
+    )
+    writeExecutable(
+      gcloudPath,
+      `#!/usr/bin/env node
+if (process.argv.slice(2).join(' ') === 'auth application-default print-access-token') {
+  process.stdout.write('registry-access-token\\n')
 }
 `,
     )

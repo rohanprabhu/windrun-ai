@@ -33,11 +33,24 @@ const ALLOWED_PNPM_SCRIPTS = new Set([
 ])
 const libraryDirectory = dirname(fileURLToPath(import.meta.url))
 const defaultRepositoryRoot = resolve(libraryDirectory, '..', '..', '..')
+const ARTIFACT_REGISTRY_HOST = 'asia-south1-docker.pkg.dev'
 const DOCKER_CREDENTIAL_HELPER_CONFIG = `${JSON.stringify({
   credHelpers: {
-    'asia-south1-docker.pkg.dev': 'gcloud',
+    [ARTIFACT_REGISTRY_HOST]: 'gcloud',
   },
 })}\n`
+
+function dockerRegistryAuthConfig(accessToken) {
+  return `${JSON.stringify({
+    auths: {
+      [ARTIFACT_REGISTRY_HOST]: {
+        auth: Buffer.from(`oauth2accesstoken:${accessToken}`).toString(
+          'base64',
+        ),
+      },
+    },
+  })}\n`
+}
 
 function isExactArgs(args, expected) {
   return (
@@ -284,6 +297,22 @@ export function createPulumiOperations({
   async function runPulumiResult(args, options = {}) {
     validateArgs(args)
     const childEnvironment = options.env || environment
+    const mutationMayHaveStarted = pulumiMutationMayHaveStarted(args)
+    let dockerAccessToken
+    let dockerConfig = DOCKER_CREDENTIAL_HELPER_CONFIG
+    if (mutationMayHaveStarted) {
+      const tokenResult = await runChecked(
+        'gcloud',
+        ['auth', 'application-default', 'print-access-token'],
+        { cwd: root, env: childEnvironment, capture: true },
+        'gcloud Docker registry auth',
+      )
+      dockerAccessToken = tokenResult.stdout.trim()
+      if (!dockerAccessToken) {
+        throw new Error('Docker registry access token is empty')
+      }
+      dockerConfig = dockerRegistryAuthConfig(dockerAccessToken)
+    }
     const dockerConfigDirectory = await mkdtemp(
       join(tmpdir(), 'windrun-docker-config-'),
     )
@@ -294,7 +323,7 @@ export function createPulumiOperations({
     try {
       await writeFile(
         join(dockerConfigDirectory, 'config.json'),
-        DOCKER_CREDENTIAL_HELPER_CONFIG,
+        dockerConfig,
         { encoding: 'utf8', mode: 0o600 },
       )
       return await runChecked(
@@ -304,11 +333,13 @@ export function createPulumiOperations({
           cwd: infraRoot,
           env: isolatedEnvironment,
           capture: options.capture !== false,
-          mutationMayHaveStarted: pulumiMutationMayHaveStarted(args),
+          mutationMayHaveStarted,
         },
         `pulumi ${args[0]}`,
       )
     } finally {
+      dockerAccessToken = undefined
+      dockerConfig = undefined
       delete isolatedEnvironment.DOCKER_CONFIG
       delete isolatedEnvironment.GH_TOKEN
       delete isolatedEnvironment.GITHUB_TOKEN
