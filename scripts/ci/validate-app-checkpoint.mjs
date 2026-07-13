@@ -17,6 +17,18 @@ function containsRegistryCredentialField(value) {
   )
 }
 
+function containsOnlyDockerProviderMetadata(value) {
+  if (!isObject(value)) return false
+  const allowedKeys = new Set([
+    '__internal',
+    '__pulumi-go-provider-infer',
+    '__pulumi-go-provider-version',
+    'host',
+    'version',
+  ])
+  return Object.keys(value).every((key) => allowedKeys.has(key))
+}
+
 export function validateAppCheckpoint(raw) {
   let checkpoint
   try {
@@ -43,11 +55,10 @@ export function validateAppCheckpoint(raw) {
   }
 
   const provider = providers[0]
-  const providerInputKeys = Object.keys(provider.inputs || {}).sort()
   if (
     !isObject(provider.inputs) ||
-    providerInputKeys.length !== 1 ||
-    providerInputKeys[0] !== 'host' ||
+    !containsOnlyDockerProviderMetadata(provider.inputs) ||
+    !containsOnlyDockerProviderMetadata(provider.outputs) ||
     provider.inputs.host !== '' ||
     typeof provider.urn !== 'string' ||
     typeof provider.id !== 'string' ||

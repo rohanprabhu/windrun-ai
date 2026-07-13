@@ -58,6 +58,32 @@ test('accepts an exported application checkpoint with state-free helper auth', (
   assert.equal(result.stdout, 'APP CHECKPOINT AUTH SAFE\n')
 })
 
+test('accepts Pulumi docker-build provider metadata without registry credentials', () => {
+  const result = run(
+    checkpoint([
+      dockerProvider({
+        inputs: {
+          __internal: {},
+          '__pulumi-go-provider-infer': true,
+          '__pulumi-go-provider-version': 'v1.3.2',
+          host: '',
+          version: '0.0.20',
+        },
+        outputs: {
+          '__pulumi-go-provider-infer': true,
+          '__pulumi-go-provider-version': 'v1.3.2',
+          host: '',
+          version: '0.0.20',
+        },
+      }),
+      image(),
+    ]),
+  )
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout, 'APP CHECKPOINT AUTH SAFE\n')
+})
+
 for (const [name, resources] of [
   [
     'encrypted image input registries',
