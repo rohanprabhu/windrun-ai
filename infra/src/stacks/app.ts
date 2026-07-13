@@ -26,6 +26,7 @@ export interface AppStackOutputs {
 
 const gitShaPattern = /^[0-9a-f]{40}$/;
 const previewServicePattern = /^pr-[1-9][0-9]*$/;
+const repositoryRoot = path.resolve(__dirname, "..", "..", "..");
 
 function validateArgs(args: AppStackArgs) {
   if (!gitShaPattern.test(args.gitCommitSha)) {
@@ -73,10 +74,8 @@ export function createAppStack(args: AppStackArgs): AppStackOutputs {
   validateArgs(args);
 
   const registryHost = `${REGION}-docker.pkg.dev`;
-  const contextRoot = args.sourceRoot ?? "..";
-  const dockerfile = args.sourceRoot
-    ? path.join(args.sourceRoot, "windrun-ai", "Dockerfile")
-    : "../windrun-ai/Dockerfile";
+  const contextRoot = args.sourceRoot ?? repositoryRoot;
+  const dockerfile = path.join(contextRoot, "windrun-ai", "Dockerfile");
   const host = canonicalHost(args);
   const tag = pulumi.interpolate`${registryHost}/${args.projectId}/${args.repositoryId}/${args.serviceName}:${args.gitCommitSha}`;
   const dockerProvider = new dockerBuild.Provider(

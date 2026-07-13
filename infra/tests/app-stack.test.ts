@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import * as gcp from "@pulumi/gcp";
 import { describe, expect, it } from "vitest";
 
@@ -17,6 +19,7 @@ import {
 } from "./helpers/pulumi-mocks";
 
 const commitSha = "a".repeat(40);
+const repositoryRoot = path.resolve(__dirname, "..", "..");
 
 type AppKind = AppStackArgs["kind"];
 
@@ -88,8 +91,10 @@ describe("Cloud Run application stacks", () => {
     expect(image.inputs).toMatchObject({
       buildOnPreview: false,
       exec: false,
-      context: { location: ".." },
-      dockerfile: { location: "../windrun-ai/Dockerfile" },
+      context: { location: repositoryRoot },
+      dockerfile: {
+        location: path.join(repositoryRoot, "windrun-ai", "Dockerfile"),
+      },
       platforms: ["linux/amd64"],
       push: true,
       tags: [tag],

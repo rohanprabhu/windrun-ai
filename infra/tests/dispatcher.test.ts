@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import * as pulumi from "@pulumi/pulumi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +14,7 @@ import {
 
 const organization = "mock-org";
 const commitSha = "b".repeat(40);
+const repositoryRoot = path.resolve(__dirname, "..", "..");
 const digitalOceanToken = "dispatcher-test-do-token";
 const githubToken = "dispatcher-test-github-token";
 const pulumiAccessToken = "dispatcher-test-pulumi-token";
@@ -404,7 +407,7 @@ describe("Pulumi stack dispatcher", () => {
       providerName: "gcp-production",
       serviceName: "production",
       publicUrl: `https://${HOSTNAMES.production}`,
-      context: "..",
+      context: repositoryRoot,
     },
     {
       stack: "staging",
@@ -413,7 +416,7 @@ describe("Pulumi stack dispatcher", () => {
       providerName: "gcp-staging",
       serviceName: "staging",
       publicUrl: `https://${HOSTNAMES.staging}`,
-      context: "..",
+      context: repositoryRoot,
     },
     {
       stack: "pr-1",
@@ -534,7 +537,7 @@ describe("Pulumi stack dispatcher", () => {
     });
     expect(resolved.publicUrl).toBe(`https://${HOSTNAMES.production}`);
     expect(resourcesOfType("docker-build:index:Image")[0].inputs.context).toEqual(
-      { location: ".." },
+      { location: repositoryRoot },
     );
   });
 
