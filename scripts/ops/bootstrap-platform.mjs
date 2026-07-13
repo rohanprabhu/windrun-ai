@@ -138,21 +138,36 @@ export async function bootstrapPlatform({
         { capture: false },
       )
     }
-    await executePulumi(
-      ['preview', '--stack', reference],
-      { capture: false },
-    )
-    if (apply) {
+    try {
       await executePulumi(
-        ['up', '--yes', '--stack', reference],
+        ['preview', '--stack', reference],
         { capture: false },
       )
-      if (stack === 'production' || stack === 'staging') {
-        const checkpoint = await executePulumi(
-          ['stack', 'export', '--stack', reference],
-          { capture: true },
+      if (apply) {
+        await executePulumi(
+          ['up', '--yes', '--stack', reference],
+          { capture: false },
         )
-        validateCheckpoint(checkpoint)
+        if (stack === 'production' || stack === 'staging') {
+          const checkpoint = await executePulumi(
+            ['stack', 'export', '--stack', reference],
+            { capture: true },
+          )
+          validateCheckpoint(checkpoint)
+        }
+      }
+    } finally {
+      if (stack === 'production' || stack === 'staging') {
+        await executePulumi(
+          [
+            'config',
+            'rm',
+            'windrun-ai:gitCommitSha',
+            '--stack',
+            reference,
+          ],
+          { capture: false },
+        )
       }
     }
     completedStacks.push(stack)

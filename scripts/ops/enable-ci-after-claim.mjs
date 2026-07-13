@@ -256,6 +256,21 @@ export async function enableCiAfterClaim({
 
     await runStep(
       executeCommand,
+      'pnpm ci:validate-contract',
+      'pnpm',
+      ['ci:validate-contract'],
+      { cwd: root, env: childEnvironment, capture: false },
+    )
+    await runStep(
+      executeCommand,
+      'pnpm ci:quality',
+      'pnpm',
+      ['ci:quality'],
+      { cwd: root, env: childEnvironment, capture: false },
+    )
+
+    await runStep(
+      executeCommand,
       'pulumi stack select',
       'pulumi',
       ['stack', 'select', '--create', deliveryStack],
@@ -277,21 +292,6 @@ export async function enableCiAfterClaim({
         { cwd: infraRoot, env: childEnvironment, capture: false },
       )
     }
-
-    await runStep(
-      executeCommand,
-      'pnpm ci:validate-contract',
-      'pnpm',
-      ['ci:validate-contract'],
-      { cwd: root, env: childEnvironment, capture: false },
-    )
-    await runStep(
-      executeCommand,
-      'pnpm ci:quality',
-      'pnpm',
-      ['ci:quality'],
-      { cwd: root, env: childEnvironment, capture: false },
-    )
 
     providerEnvironment = {
       ...childEnvironment,

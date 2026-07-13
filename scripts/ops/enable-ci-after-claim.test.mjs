@@ -350,14 +350,14 @@ test('runs the exact fail-closed delivery enablement order', async () => {
       'gh auth status --hostname github.com',
       'gh auth token --hostname github.com',
       `pulumi stack output --json --stack ${FOUNDATION_STACK}`,
+      'pnpm ci:validate-contract',
+      'pnpm ci:quality',
       `pulumi stack select --create ${DELIVERY_STACK}`,
       `pulumi config set windrun-ai:stackKind delivery --stack ${DELIVERY_STACK}`,
       `pulumi config set windrun-ai:pulumiOrganization ${LOGIN} --stack ${DELIVERY_STACK}`,
       `pulumi config set windrun-ai:enablePulumiGithubOidc true --stack ${DELIVERY_STACK}`,
       `pulumi config set windrun-ai:productionCiEnabled true --stack ${DELIVERY_STACK}`,
       `pulumi config set windrun-ai:stagingCiEnabled true --stack ${DELIVERY_STACK}`,
-      'pnpm ci:validate-contract',
-      'pnpm ci:quality',
       `pulumi preview --stack ${DELIVERY_STACK}`,
       `pulumi up --yes --stack ${DELIVERY_STACK}`,
     ],
@@ -369,14 +369,14 @@ test('runs the exact fail-closed delivery enablement order', async () => {
       REPOSITORY_ROOT,
       REPOSITORY_ROOT,
       INFRA_ROOT,
-      INFRA_ROOT,
-      INFRA_ROOT,
-      INFRA_ROOT,
-      INFRA_ROOT,
-      INFRA_ROOT,
-      INFRA_ROOT,
       REPOSITORY_ROOT,
       REPOSITORY_ROOT,
+      INFRA_ROOT,
+      INFRA_ROOT,
+      INFRA_ROOT,
+      INFRA_ROOT,
+      INFRA_ROOT,
+      INFRA_ROOT,
       INFRA_ROOT,
       INFRA_ROOT,
     ],
@@ -510,6 +510,15 @@ if (args === 'whoami --json') {
 } else if (args.startsWith('preview ') || args.startsWith('up ')) {
   process.stdout.write('stdout:' + process.env.PULUMI_ACCESS_TOKEN + ':' + process.env.GITHUB_TOKEN + '\\n')
   process.stderr.write('stderr:' + process.env.GITHUB_TOKEN + ':' + process.env.PULUMI_ACCESS_TOKEN + '\\n')
+}
+`,
+    )
+    writeExecutable(
+      join(bin, 'gcloud'),
+      `#!/usr/bin/env node
+const args = process.argv.slice(2).join(' ')
+if (args === 'auth application-default print-access-token') {
+  process.stdout.write('registry-token\\n')
 }
 `,
     )

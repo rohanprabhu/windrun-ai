@@ -754,6 +754,16 @@ if (process.argv.slice(2).join(' ') === 'auth application-default print-access-t
       commitConfigs.every(({ args }) => args[3] === GIT_SHA),
       true,
     )
+    const commitRemovals = calls.filter(
+      ({ args }) =>
+        args[0] === 'config' &&
+        args[1] === 'rm' &&
+        args[2] === 'windrun-ai:gitCommitSha',
+    )
+    assert.deepEqual(
+      commitRemovals.map(({ args }) => args.at(-1)),
+      [stackRef(LOGIN, 'production'), stackRef(LOGIN, 'staging')],
+    )
     assert.deepEqual(messages, [
       'GOOGLE IDENTITY VERIFIED: rohan@windrun.ai',
       'BOOTSTRAP PHASE 1 COMPLETE; CLAIM ACCOUNT BEFORE DELIVERY',
