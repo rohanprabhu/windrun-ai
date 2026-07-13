@@ -41,7 +41,7 @@ function requireStringOutput(
   name: FoundationOutputName,
 ) {
   return reference.outputs.apply((outputs) => {
-    if (!Object.hasOwn(outputs, name)) {
+    if (!Object.prototype.hasOwnProperty.call(outputs, name)) {
       throw new Error(
         `Required output '${name}' does not exist on stack '${stackName}'.`,
       );
