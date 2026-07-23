@@ -70,11 +70,11 @@ Missing, empty, or renamed outputs are contract violations. The last 12 values a
 
 ### Phase 1: GCP resources before account claim
 
-The first foundation update is local-only. Both the active gcloud identity and Application Default Credentials must resolve to exactly `rohan@windrun.ai`, which must have the required organization project-lifecycle and billing permissions. The bootstrap GCP provider intentionally has no project; per-project providers are created only after the project outputs exist.
+The first foundation update is local-only. The operations wrapper requests a short-lived token with `gcloud auth print-access-token --account=rohan@windrun.ai`, verifies that token resolves to exactly `rohan@windrun.ai`, and passes `GOOGLE_OAUTH_ACCESS_TOKEN` plus a stack-derived `GOOGLE_CLOUD_PROJECT` only to the Pulumi child process. The active/default gcloud account, default project, and Application Default Credentials are not trusted. `rohan@windrun.ai` must have the required organization project-lifecycle and billing permissions. The bootstrap GCP provider intentionally has no project; per-project providers are created only after the project outputs exist.
 
 Before the first update, `infra/scripts/bootstrap-foundation-secret.sh` transfers the DigitalOcean token from macOS Keychain to encrypted `windrun-ai:digitalOceanToken` config. It verifies that the serialized stack value is encrypted before deleting the Keychain item, and it never prints the token.
 
-Local ADC plus the encrypted DigitalOcean secret allow this pre-claim order:
+Explicit `rohan@windrun.ai` token auth plus the encrypted DigitalOcean secret allow this pre-claim order:
 
 ```text
 foundation -> production -> production-edge -> staging -> staging-edge
@@ -86,7 +86,7 @@ Supply `windrun-ai:gitCommitSha` to the two application stacks. `production` mus
 
 Complete the Pulumi account claim using `rohan@windrun.ai` as the ownership email, discard the invalidated ephemeral credential, and re-authenticate Pulumi. `rohan@windrun.ai` is the claim email, not the Pulumi login; the login remains unknown until re-authentication. `windrun-ai:pulumiOrganization` comes only from `pulumi whoami`. Initialize `delivery` locally with that exact result, then set `windrun-ai:enablePulumiGithubOidc=true`.
 
-Export `GITHUB_TOKEN` and `PULUMI_ACCESS_TOKEN` into the local shell from their secure post-claim credential sources. Never print, commit, or place either value in Pulumi config. Apply `delivery` locally with ADC still resolving to exactly `rohan@windrun.ai`.
+Export `GITHUB_TOKEN` and `PULUMI_ACCESS_TOKEN` into the local shell from their secure post-claim credential sources. Never print, commit, or place either value in Pulumi config. Apply `delivery` locally through the operations wrapper; it continues to mint and verify the explicit `rohan@windrun.ai` Google token instead of using ADC.
 
 The dispatcher validates `GITHUB_TOKEN`; it also validates `PULUMI_ACCESS_TOKEN` when OIDC is enabled. The GitHub provider plugin consumes `GITHUB_TOKEN` from the Pulumi child-process environment. The Pulumi Service provider plugin consumes `PULUMI_ACCESS_TOKEN` from that environment. Explicit provider resources persist only non-secret configuration: GitHub owner `rohanprabhu` with official endpoint `https://api.github.com/`, and the Pulumi Service official endpoint `https://api.pulumi.com`. Tokens are not provider inputs or Pulumi state. No token is an output, resource name, Actions variable, log value, or committed value. Delivery invokes no `gh` command.
 
@@ -146,7 +146,7 @@ Independent Pulumi stacks do not acquire destroy ordering from `StackReference`.
 ```text
 all preview/application/edge stacks empty
 -> delivery destroyed
--> exact active gcloud + ADC identity verified as rohan@windrun.ai
+-> explicit rohan@windrun.ai Google token and stack project injected into Pulumi
 -> windrun-ai:allowProjectDeletion=true previewed and applied locally
 -> foundation state verified unprotected with deletionPolicy: DELETE
 -> foundation destroyed locally as rohan@windrun.ai

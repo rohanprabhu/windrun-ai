@@ -71,8 +71,7 @@ function createProcessHarness({
   stackExport = {
     deployment: { resources: [{ type: 'pulumi:pulumi:Stack' }] },
   },
-  activeGoogleEmail = OWNER_EMAIL,
-  adcToken = 'adc-token-fixture',
+  accountToken = 'account-token-fixture',
 } = {}) {
   const calls = []
 
@@ -97,15 +96,15 @@ function createProcessHarness({
     }
     if (
       command ===
-      'gcloud auth list --filter=status:ACTIVE --format=value(account)'
+      'gcloud auth application-default print-access-token'
     ) {
-      return { stdout: `${activeGoogleEmail}\n`, stderr: '' }
+      throw new Error('ADC token lookup is not allowed in tests')
     }
     if (
       command ===
-      'gcloud auth application-default print-access-token'
+      `gcloud auth print-access-token --account=${OWNER_EMAIL}`
     ) {
-      return { stdout: `${adcToken}\n`, stderr: '' }
+      return { stdout: `${accountToken}\n`, stderr: '' }
     }
     if (command === 'git rev-parse HEAD') {
       return { stdout: `${GIT_SHA}\n`, stderr: '' }
@@ -153,34 +152,57 @@ test('builds only fully qualified Windrun stack references', () => {
   assert.throws(() => stackRef('claimed-user', 'bad/stack'), /stack name/)
 })
 
-test('runPulumi always uses infra cwd and inherits ADC environment', async () => {
+test('runPulumi always uses infra cwd with explicit account and project auth', async () => {
   const { harness, operations } = createOperations()
 
   await operations.runPulumi(['preview', '--stack', 'org/windrun-ai/staging'])
 
-  assert.equal(harness.calls.length, 1)
+  assert.equal(harness.calls.length, 2)
   assert.deepEqual(
     {
-      ...harness.calls[0],
+      ...harness.calls[1],
       env: {
-        PATH: harness.calls[0].env.PATH,
-        SAFE_ADC: harness.calls[0].env.SAFE_ADC,
+        PATH: harness.calls[1].env.PATH,
+        SAFE_ADC: harness.calls[1].env.SAFE_ADC,
+        CLOUDSDK_CORE_ACCOUNT: harness.calls[1].env.CLOUDSDK_CORE_ACCOUNT,
+        CLOUDSDK_CORE_PROJECT: harness.calls[1].env.CLOUDSDK_CORE_PROJECT,
+        GOOGLE_CLOUD_PROJECT: harness.calls[1].env.GOOGLE_CLOUD_PROJECT,
+        GOOGLE_OAUTH_ACCESS_TOKEN:
+          harness.calls[1].env.GOOGLE_OAUTH_ACCESS_TOKEN,
       },
     },
     {
       executable: 'pulumi',
       args: ['preview', '--stack', 'org/windrun-ai/staging'],
       cwd: resolve('/workspace/windrun-ai', 'infra'),
-      env: { PATH: process.env.PATH, SAFE_ADC: 'inherited' },
+      env: {
+        PATH: process.env.PATH,
+        SAFE_ADC: 'inherited',
+        CLOUDSDK_CORE_ACCOUNT: OWNER_EMAIL,
+        CLOUDSDK_CORE_PROJECT: 'windrun-ai-staging-20260712',
+        GOOGLE_CLOUD_PROJECT: 'windrun-ai-staging-20260712',
+        GOOGLE_OAUTH_ACCESS_TOKEN: 'account-token-fixture',
+      },
       capture: true,
     },
   )
-  assert.match(harness.calls[0].env.DOCKER_CONFIG, /windrun-docker-config-/u)
+  assert.deepEqual(
+    harness.calls.map(({ executable, args }) => [executable, ...args]),
+    [
+      ['gcloud', 'auth', 'print-access-token', `--account=${OWNER_EMAIL}`],
+      ['pulumi', 'preview', '--stack', 'org/windrun-ai/staging'],
+    ],
+  )
+  assert.match(harness.calls[1].env.DOCKER_CONFIG, /windrun-docker-config-/u)
 })
 
-test('runPulumi uses and removes an isolated gcloud Docker credential-helper config', async () => {
+test('runPulumi uses and removes an isolated explicit-token Docker config', async () => {
   const calls = []
   let dockerConfigPath
+  const accessToken = 'registry-access-token-fixture'
+  const expectedAuth = Buffer.from(
+    `oauth2accesstoken:${accessToken}`,
+  ).toString('base64')
   const operations = createPulumiOperations({
     environment: {
       PATH: process.env.PATH,
@@ -189,13 +211,21 @@ test('runPulumi uses and removes an isolated gcloud Docker credential-helper con
     repositoryRoot: '/workspace/windrun-ai',
     async processRunner(executable, args, options) {
       calls.push({ executable, args: [...args], env: { ...options.env } })
+      if (
+        executable === 'gcloud' &&
+        args.join(' ') === `auth print-access-token --account=${OWNER_EMAIL}`
+      ) {
+        return { stdout: `${accessToken}\n`, stderr: '' }
+      }
       dockerConfigPath = options.env.DOCKER_CONFIG
       assert.notEqual(dockerConfigPath, '/untrusted/operator/docker-config')
       assert.deepEqual(
         JSON.parse(readFileSync(join(dockerConfigPath, 'config.json'), 'utf8')),
         {
-          credHelpers: {
-            'asia-south1-docker.pkg.dev': 'gcloud',
+          auths: {
+            'asia-south1-docker.pkg.dev': {
+              auth: expectedAuth,
+            },
           },
         },
       )
@@ -205,7 +235,13 @@ test('runPulumi uses and removes an isolated gcloud Docker credential-helper con
 
   await operations.runPulumi(['preview', '--stack', 'org/windrun-ai/staging'])
 
-  assert.equal(calls.length, 1)
+  assert.deepEqual(
+    calls.map(({ executable, args }) => [executable, ...args]),
+    [
+      ['gcloud', 'auth', 'print-access-token', `--account=${OWNER_EMAIL}`],
+      ['pulumi', 'preview', '--stack', 'org/windrun-ai/staging'],
+    ],
+  )
   assert.equal(existsSync(dockerConfigPath), false)
 })
 
@@ -226,7 +262,7 @@ test('mutating runPulumi uses a temporary Artifact Registry OAuth Docker config'
       calls.push({ executable, args: [...args], env: { ...options.env } })
       if (
         executable === 'gcloud' &&
-        args.join(' ') === 'auth application-default print-access-token'
+        args.join(' ') === `auth print-access-token --account=${OWNER_EMAIL}`
       ) {
         return { stdout: `${accessToken}\n`, stderr: '' }
       }
@@ -250,11 +286,38 @@ test('mutating runPulumi uses a temporary Artifact Registry OAuth Docker config'
   assert.deepEqual(
     calls.map(({ executable, args }) => [executable, ...args]),
     [
-      ['gcloud', 'auth', 'application-default', 'print-access-token'],
+      ['gcloud', 'auth', 'print-access-token', `--account=${OWNER_EMAIL}`],
       ['pulumi', 'up', '--yes', '--stack', 'org/windrun-ai/staging'],
     ],
   )
   assert.equal(existsSync(dockerConfigPath), false)
+})
+
+test('runPulumi derives explicit Google project from the selected stack', async () => {
+  for (const [stack, projectId] of [
+    ['foundation', 'windrun-ai-shared-20260712'],
+    ['delivery', 'windrun-ai-shared-20260712'],
+    ['production', 'windrun-ai-prod-20260712'],
+    ['production-edge', 'windrun-ai-prod-20260712'],
+    ['staging', 'windrun-ai-staging-20260712'],
+    ['staging-edge', 'windrun-ai-staging-20260712'],
+    ['pr-42', 'windrun-ai-staging-20260712'],
+  ]) {
+    const { harness, operations } = createOperations()
+
+    await operations.runPulumi([
+      'preview',
+      '--stack',
+      `org/windrun-ai/${stack}`,
+    ])
+
+    const pulumiCall = harness.calls.find(
+      ({ executable }) => executable === 'pulumi',
+    )
+    assert.equal(pulumiCall.env.GOOGLE_CLOUD_PROJECT, projectId)
+    assert.equal(pulumiCall.env.CLOUDSDK_CORE_PROJECT, projectId)
+    assert.equal(pulumiCall.env.CLOUDSDK_CORE_ACCOUNT, OWNER_EMAIL)
+  }
 })
 
 test('production refuses a PULUMI_BIN whose basename is not pulumi', async () => {
@@ -326,7 +389,7 @@ test('runPulumi classifies read-only timeouts separately from unknown mutations'
     environment: { PATH: process.env.PATH },
     async processRunner(_executable, args, options) {
       classifications.push({ args: [...args], unknown: options.mutationMayHaveStarted })
-      if (args.join(' ') === 'auth application-default print-access-token') {
+      if (args.join(' ') === `auth print-access-token --account=${OWNER_EMAIL}`) {
         return { stdout: 'registry-access-token\n', stderr: '' }
       }
       if (options.mutationMayHaveStarted) {
@@ -438,7 +501,7 @@ test('destroyAndRemove uses one exact Pulumi destroy/remove command', async () =
   ])
 })
 
-test('assertExactGoogleIdentity permits only exact active gcloud and ADC identities', async () => {
+test('assertExactGoogleIdentity permits only the explicit Google account identity', async () => {
   const harness = createProcessHarness()
   const fetchCalls = []
   const { operations } = createOperations({
@@ -460,15 +523,8 @@ test('assertExactGoogleIdentity permits only exact active gcloud and ADC identit
       [
         'gcloud',
         'auth',
-        'list',
-        '--filter=status:ACTIVE',
-        '--format=value(account)',
-      ],
-      [
-        'gcloud',
-        'auth',
-        'application-default',
         'print-access-token',
+        `--account=${OWNER_EMAIL}`,
       ],
     ],
   )
@@ -476,28 +532,20 @@ test('assertExactGoogleIdentity permits only exact active gcloud and ADC identit
     {
       url: 'https://openidconnect.googleapis.com/v1/userinfo',
       options: {
-        headers: { Authorization: 'Bearer adc-token-fixture' },
+        headers: { Authorization: 'Bearer account-token-fixture' },
       },
     },
   ])
 })
 
-test('assertExactGoogleIdentity refuses either mismatched identity without logging the ADC token', async () => {
-  const wrongActive = createOperations({
-    harness: createProcessHarness({ activeGoogleEmail: 'other@example.com' }),
-  })
-  await assert.rejects(
-    wrongActive.operations.assertExactGoogleIdentity(),
-    /active gcloud identity must be exactly rohan@windrun\.ai/,
-  )
-
+test('assertExactGoogleIdentity refuses a mismatched explicit account token without logging it', async () => {
   const wrongAdc = createOperations({
     fetchImpl: async (url) =>
       jsonResponseAtUrl(url, { email: 'other@example.com' }),
   })
   await assert.rejects(
     wrongAdc.operations.assertExactGoogleIdentity(),
-    /ADC identity must be exactly rohan@windrun\.ai/,
+    /explicit Google account identity must be exactly rohan@windrun\.ai/,
   )
 })
 
@@ -509,7 +557,7 @@ test('assertExactGoogleIdentity rejects non-success userinfo even with the expec
 
   await assert.rejects(
     operations.assertExactGoogleIdentity(),
-    /ADC identity lookup failed/,
+    /explicit Google account identity lookup failed/,
   )
 })
 
@@ -549,7 +597,10 @@ test('assertExactGoogleIdentity bounds userinfo headers, bodies, and size', asyn
       ),
     ])
     assert.equal(outcome.status, 'rejected')
-    assert.match(outcome.error.message, /ADC identity lookup failed/)
+    assert.match(
+      outcome.error.message,
+      /explicit Google account identity lookup failed/,
+    )
   }
 })
 
@@ -666,6 +717,9 @@ if (process.argv.slice(2).join(' ') === 'whoami --json') {
       gcloudPath,
       `#!/usr/bin/env node
 if (process.argv.slice(2).join(' ') === 'auth application-default print-access-token') {
+  throw new Error('ADC lookup must not be used')
+}
+if (process.argv.slice(2).join(' ') === ${JSON.stringify(`auth print-access-token --account=${OWNER_EMAIL}`)}) {
   process.stdout.write('registry-access-token\\n')
 }
 `,
@@ -2117,8 +2171,7 @@ test('full teardown documentation records every destructive and recovery boundar
     'DELETE_REQUESTED',
     '30-day recovery window',
     'permanently unavailable',
-    'gcloud auth list --filter=status:ACTIVE --format=value(account)',
-    'gcloud auth application-default print-access-token',
+    'gcloud auth print-access-token --account=rohan@windrun.ai',
     'no mutating `gcloud`, `doctl`, or `gh`',
     'updateInProgress',
     '`foundation` stack is absent',

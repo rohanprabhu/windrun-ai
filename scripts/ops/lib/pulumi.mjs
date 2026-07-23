@@ -9,6 +9,14 @@ import { boundedHttpRequest } from '../../lib/bounded-http.mjs'
 const EXPECTED_GOOGLE_IDENTITY = 'rohan@windrun.ai'
 const GOOGLE_USERINFO_URL =
   'https://openidconnect.googleapis.com/v1/userinfo'
+const STACK_PROJECTS = Object.freeze({
+  foundation: 'windrun-ai-shared-20260712',
+  delivery: 'windrun-ai-shared-20260712',
+  production: 'windrun-ai-prod-20260712',
+  'production-edge': 'windrun-ai-prod-20260712',
+  staging: 'windrun-ai-staging-20260712',
+  'staging-edge': 'windrun-ai-staging-20260712',
+})
 const FORBIDDEN_GCP_ENVIRONMENT = Object.freeze([
   'GOOGLE_CREDENTIALS',
   'GOOGLE_CLOUD_KEYFILE_JSON',
@@ -50,6 +58,31 @@ function dockerRegistryAuthConfig(accessToken) {
       },
     },
   })}\n`
+}
+
+function stackNameFromRef(reference) {
+  if (typeof reference !== 'string' || reference.trim() === '') return undefined
+  return reference.split('/').at(-1)
+}
+
+function projectForStackName(stackName) {
+  if (typeof stackName !== 'string') return undefined
+  if (/^pr-[1-9][0-9]*$/u.test(stackName)) {
+    return STACK_PROJECTS.staging
+  }
+  return STACK_PROJECTS[stackName]
+}
+
+function stackReferenceFromPulumiArgs(args) {
+  const stackIndex = args.indexOf('--stack')
+  if (stackIndex >= 0) {
+    return args[stackIndex + 1]
+  }
+  return undefined
+}
+
+function projectForPulumiArgs(args) {
+  return projectForStackName(stackNameFromRef(stackReferenceFromPulumiArgs(args)))
 }
 
 function isExactArgs(args, expected) {
@@ -286,6 +319,31 @@ export function createPulumiOperations({
     return true
   }
 
+  async function mintGoogleAccessToken(childEnvironment) {
+    const tokenResult = await runChecked(
+      'gcloud',
+      [
+        'auth',
+        'print-access-token',
+        `--account=${EXPECTED_GOOGLE_IDENTITY}`,
+      ],
+      {
+        cwd: root,
+        env: {
+          ...childEnvironment,
+          CLOUDSDK_CORE_ACCOUNT: EXPECTED_GOOGLE_IDENTITY,
+        },
+        capture: true,
+      },
+      'gcloud explicit Google account token',
+    )
+    const accessToken = tokenResult.stdout.trim()
+    if (!accessToken) {
+      throw new Error('explicit Google account access token is empty')
+    }
+    return accessToken
+  }
+
   function pulumiExecutable(childEnvironment = environment) {
     const executable = childEnvironment.PULUMI_BIN || 'pulumi'
     if (!usesInjectedRunner && basename(executable) !== 'pulumi') {
@@ -298,20 +356,12 @@ export function createPulumiOperations({
     validateArgs(args)
     const childEnvironment = options.env || environment
     const mutationMayHaveStarted = pulumiMutationMayHaveStarted(args)
-    let dockerAccessToken
+    const googleProject = projectForPulumiArgs(args)
+    let googleAccessToken
     let dockerConfig = DOCKER_CREDENTIAL_HELPER_CONFIG
-    if (mutationMayHaveStarted) {
-      const tokenResult = await runChecked(
-        'gcloud',
-        ['auth', 'application-default', 'print-access-token'],
-        { cwd: root, env: childEnvironment, capture: true },
-        'gcloud Docker registry auth',
-      )
-      dockerAccessToken = tokenResult.stdout.trim()
-      if (!dockerAccessToken) {
-        throw new Error('Docker registry access token is empty')
-      }
-      dockerConfig = dockerRegistryAuthConfig(dockerAccessToken)
+    if (googleProject) {
+      googleAccessToken = await mintGoogleAccessToken(childEnvironment)
+      dockerConfig = dockerRegistryAuthConfig(googleAccessToken)
     }
     const dockerConfigDirectory = await mkdtemp(
       join(tmpdir(), 'windrun-docker-config-'),
@@ -319,6 +369,14 @@ export function createPulumiOperations({
     const isolatedEnvironment = {
       ...childEnvironment,
       DOCKER_CONFIG: dockerConfigDirectory,
+      ...(googleProject
+        ? {
+            CLOUDSDK_CORE_ACCOUNT: EXPECTED_GOOGLE_IDENTITY,
+            CLOUDSDK_CORE_PROJECT: googleProject,
+            GOOGLE_CLOUD_PROJECT: googleProject,
+            GOOGLE_OAUTH_ACCESS_TOKEN: googleAccessToken,
+          }
+        : {}),
     }
     try {
       await writeFile(
@@ -338,9 +396,13 @@ export function createPulumiOperations({
         `pulumi ${args[0]}`,
       )
     } finally {
-      dockerAccessToken = undefined
+      googleAccessToken = undefined
       dockerConfig = undefined
       delete isolatedEnvironment.DOCKER_CONFIG
+      delete isolatedEnvironment.CLOUDSDK_CORE_ACCOUNT
+      delete isolatedEnvironment.CLOUDSDK_CORE_PROJECT
+      delete isolatedEnvironment.GOOGLE_CLOUD_PROJECT
+      delete isolatedEnvironment.GOOGLE_OAUTH_ACCESS_TOKEN
       delete isolatedEnvironment.GH_TOKEN
       delete isolatedEnvironment.GITHUB_TOKEN
       delete isolatedEnvironment.PULUMI_ACCESS_TOKEN
@@ -462,32 +524,19 @@ export function createPulumiOperations({
           }
         }
       }
-      const active = await runChecked(
+      const explicitAccountToken = await runChecked(
         'gcloud',
         [
           'auth',
-          'list',
-          '--filter=status:ACTIVE',
-          '--format=value(account)',
+          'print-access-token',
+          `--account=${EXPECTED_GOOGLE_IDENTITY}`,
         ],
         { cwd: root, env: environment, capture: true },
-        'gcloud active identity',
+        'gcloud explicit Google account identity',
       )
-      if (active.stdout.trim() !== EXPECTED_GOOGLE_IDENTITY) {
-        throw new Error(
-          `active gcloud identity must be exactly ${EXPECTED_GOOGLE_IDENTITY}`,
-        )
-      }
-
-      const adc = await runChecked(
-        'gcloud',
-        ['auth', 'application-default', 'print-access-token'],
-        { cwd: root, env: environment, capture: true },
-        'gcloud ADC identity',
-      )
-      adcToken = adc.stdout.trim()
+      adcToken = explicitAccountToken.stdout.trim()
       if (!adcToken) {
-        throw new Error('ADC access token is empty')
+        throw new Error('explicit Google account access token is empty')
       }
       requestHeaders = { Authorization: `Bearer ${adcToken}` }
 
@@ -497,7 +546,7 @@ export function createPulumiOperations({
           fetchImpl,
           url: GOOGLE_USERINFO_URL,
           init: { headers: requestHeaders },
-          label: 'Google ADC userinfo',
+          label: 'Google explicit account userinfo',
           requestTimeoutMs,
           maxBodyBytes: maxUserinfoBytes,
           body: 'json',
@@ -507,11 +556,11 @@ export function createPulumiOperations({
         }
         profile = result.json
       } catch {
-        throw new Error('ADC identity lookup failed')
+        throw new Error('explicit Google account identity lookup failed')
       }
       if (profile?.email !== EXPECTED_GOOGLE_IDENTITY) {
         throw new Error(
-          `ADC identity must be exactly ${EXPECTED_GOOGLE_IDENTITY}`,
+          `explicit Google account identity must be exactly ${EXPECTED_GOOGLE_IDENTITY}`,
         )
       }
     } finally {

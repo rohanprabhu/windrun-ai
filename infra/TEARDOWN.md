@@ -17,7 +17,7 @@ all preview/application/edge stacks empty
 
 The first condition covers every numeric `pr-<number>` preview and the `production`, `production-edge`, `staging`, and `staging-edge` stacks. Verify that each is absent or contains no non-root resource before touching delivery. Delivery is destroyed locally with its secure provider credential environment available, then verified absent or empty before foundation can cross the deletion boundary.
 
-Project creation, metadata and billing drift repair, and final deletion are local-only Pulumi operations. Immediately before the foundation transition, both the active gcloud account and Application Default Credentials must resolve to exactly `rohan@windrun.ai`. The foundation CI identity has neither organization nor billing-account permission and cannot perform this escalation.
+Project creation, metadata and billing drift repair, and final deletion are local-only Pulumi operations. Immediately before the foundation transition, the operations wrapper must mint a short-lived token with `gcloud auth print-access-token --account=rohan@windrun.ai`, verify the token identity through Google userinfo, and pass only that explicit token plus the stack-derived Google project into the Pulumi child process. The active/default gcloud account, default project, and ADC are not trusted. The foundation CI identity has neither organization nor billing-account permission and cannot perform this escalation.
 
 Normal foundation state has protection enabled and project `deletionPolicy: PREVENT`. Only after delivery is gone may an explicitly acknowledged full teardown set `windrun-ai:allowProjectDeletion=true`. Review the local preview, apply it locally, and inspect persisted foundation state to prove every surviving resource is unprotected and each project has `deletionPolicy: DELETE`. Only then may foundation be destroyed locally.
 
@@ -31,7 +31,7 @@ Successful foundation destruction schedules all three projects for deletion. The
 
 ## Delivery checkpoint and teardown credentials
 
-The original bootstrap is two-phase. Local ADC and encrypted DigitalOcean secret bootstrap permit the initial GCP order:
+The original bootstrap is two-phase. Explicit `rohan@windrun.ai` token auth and the encrypted DigitalOcean secret bootstrap permit the initial GCP order:
 
 ```text
 foundation -> production -> production-edge -> staging -> staging-edge

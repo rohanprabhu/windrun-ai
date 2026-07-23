@@ -66,14 +66,13 @@ These are the only authorized GitHub CLI reads; there is no `gh` mutation. The l
 
 ## Google identity and project deletion transition
 
-Before the first destructive Pulumi command, again immediately before the foundation transition, and again before any recovery update, both the active gcloud account and Application Default Credentials must resolve to exactly `rohan@windrun.ai`. The only gcloud commands the lifecycle permits are these two read-only checks:
+Before the first destructive Pulumi command, again immediately before the foundation transition, and again before any recovery update, the operations wrapper must mint a short-lived token for the explicit Google account and verify that token resolves to exactly `rohan@windrun.ai`. The only Google auth command the lifecycle permits is this read-only token mint:
 
 ```bash
-gcloud auth list --filter=status:ACTIVE --format=value(account)
-gcloud auth application-default print-access-token
+gcloud auth print-access-token --account=rohan@windrun.ai
 ```
 
-The ADC token is used only with Google's OpenID userinfo endpoint and is never printed. These `gcloud auth` reads do not match the prohibited `gcloud .*create` or `gcloud .*delete` mutation patterns. There is no mutating gcloud exception.
+The explicit account token is used only with Google's OpenID userinfo endpoint and the Pulumi child process; it is never printed. The wrapper also injects the stack-derived `GOOGLE_CLOUD_PROJECT`, so the default gcloud project is not trusted. This `gcloud auth` read does not match the prohibited `gcloud .*create` or `gcloud .*delete` mutation patterns. There is no mutating gcloud exception.
 
 After the second identity check, the script verifies the normal foundation checkpoint: every surviving non-root resource is protected and the exact shared, staging, and production projects each have `deletionPolicy: PREVENT`. It then sets `windrun-ai:allowProjectDeletion=true` and runs a JSON diff preview.
 

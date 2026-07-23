@@ -6,7 +6,7 @@ Bootstrap is deliberately split into a local pre-claim cloud phase, a mandatory 
 
 ## Before phase one
 
-Use Node.js 22, the repository-pinned pnpm, the Pulumi managed backend `https://api.pulumi.com`, and a trusted local checkout. Both the active gcloud account and Application Default Credentials must resolve to exactly `rohan@windrun.ai`. The initial foundation update also requires the encrypted `windrun-ai:digitalOceanToken`; follow the secret-transfer procedure in [`infra/README.md`](../../infra/README.md#two-phase-bootstrap) before the first update.
+Use Node.js 22, the repository-pinned pnpm, the Pulumi managed backend `https://api.pulumi.com`, and a trusted local checkout. The operations wrapper must be able to run `gcloud auth print-access-token --account=rohan@windrun.ai`; it verifies that token and injects it plus the stack-derived Google project into Pulumi, instead of trusting the active gcloud account, default project, or ADC. The initial foundation update also requires the encrypted `windrun-ai:digitalOceanToken`; follow the secret-transfer procedure in [`infra/README.md`](../../infra/README.md#two-phase-bootstrap) before the first update.
 
 Install and verify the workspace:
 
