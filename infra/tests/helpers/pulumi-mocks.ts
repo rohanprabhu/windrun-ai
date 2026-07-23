@@ -130,7 +130,7 @@ function resourceState(args: MockResourceArgs) {
         ...state,
         dnsResourceRecords: [
           {
-            name: `_acme-challenge.${args.name}.app.windrun.ai.`,
+            name: `_acme-challenge.${args.name}.${String(state.domain)}.`,
             type: "CNAME",
             data: `${args.name}.authorize.certificatemanager.goog.`,
           },

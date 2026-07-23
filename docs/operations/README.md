@@ -19,7 +19,7 @@ The four operator categories are Automatic, Manual / approved, Local-only, and D
 | Operation | Class | Trigger and effect |
 | --- | --- | --- |
 | Production application deploy | Automatic | A push to `main` runs quality checks, previews `production`, applies it, and smoke-tests `https://app.windrun.ai/api/health`. |
-| Staging application deploy | Automatic | A push to `staging` runs quality checks, previews `staging`, applies it, and smoke-tests `https://staging.app.windrun.ai/api/health`. |
+| Staging application deploy | Automatic | A push to `staging` runs quality checks, previews `staging`, applies it, and smoke-tests `https://app.staging.windrun.ai/api/health`. |
 | Pull-request preview deploy | Automatic for same-repository PRs | `opened`, `reopened`, and `synchronize` events targeting `main` run quality checks and then preview/apply `pr-<number>`. Fork PRs run only the uncredentialed quality job. |
 | Pull-request preview cleanup | Automatic and destructive for same-repository PRs | A `closed` event targeting `main` destroys and removes `pr-<number>`. The per-PR non-canceling queue prevents cleanup from interrupting an in-progress update. |
 | Edge or foundation change | Manual / approved | A `workflow_dispatch` from `main` targets `production-edge`, `staging-edge`, or `foundation`. Both preview-only and apply jobs require the target GitHub environment approval. There is no workflow destroy option. |
@@ -64,7 +64,7 @@ Acceptance requires all fourteen Pulumi-managed repository variables, no matchin
 
 ```bash
 curl --fail --silent https://app.windrun.ai/api/health
-curl --fail --silent https://staging.app.windrun.ai/api/health
+curl --fail --silent https://app.staging.windrun.ai/api/health
 ```
 
 After bootstrap, each response must be JSON containing `"ok":true`.

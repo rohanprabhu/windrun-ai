@@ -69,4 +69,4 @@ jobs:
       - run: |
           set -o pipefail
           pnpm --dir infra exec pulumi stack export --stack "${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/staging" | node scripts/ci/validate-app-checkpoint.mjs
-      - run: node scripts/ci/smoke-test.mjs https://staging.app.windrun.ai/api/health --attempts 30 --delay-ms 10000
+      - run: node scripts/ci/smoke-test.mjs https://app.staging.windrun.ai/api/health --attempts 30 --delay-ms 10000

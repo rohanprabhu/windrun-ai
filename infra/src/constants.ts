@@ -10,9 +10,10 @@ export const PROJECT_IDS = {
 
 export const HOSTNAMES = {
   production: "app.windrun.ai",
-  staging: "staging.app.windrun.ai",
-  previewSuffix: "staging.app.windrun.ai",
-  delegatedZone: "app.windrun.ai.",
+  staging: "app.staging.windrun.ai",
+  previewSuffix: "app.staging.windrun.ai",
+  productionZone: "app.windrun.ai.",
+  stagingZone: "staging.windrun.ai.",
   parentZone: "windrun.ai",
 } as const;
 

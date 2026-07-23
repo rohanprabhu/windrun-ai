@@ -20,7 +20,7 @@
 - No Composio account, organization, credential, state backend, or resource may be read for reuse or written.
 - GCP projects are exactly `windrun-ai-shared-20260712`, `windrun-ai-staging-20260712`, and `windrun-ai-prod-20260712` under organization `391332700711` and billing account `018EDA-2A53D0-A39B57`.
 - Production and staging have separate projects, Artifact Registry repositories, runtime identities, deploy identities, certificates, IP addresses, and load balancers.
-- The staging load balancer supports the fixed `staging` service and same-project preview services through URL mask `<service>.staging.app.windrun.ai` without per-preview edge changes.
+- The staging load balancer supports the fixed `staging` service and same-project preview services through URL mask `<service>.app.staging.windrun.ai` without per-preview edge changes.
 - Every GCP resource uses an explicit project-scoped provider; default GCP providers are disabled in every stack.
 - Pulumi is the sole mutator for GCP, DigitalOcean DNS, Pulumi Cloud OIDC, GitHub deployment environments, deployment policies, and Actions variables.
 - Shell/Node helpers may validate state and invoke Pulumi. They may not mutate infrastructure through `gcloud`, `doctl`, `gh api`, `gh variable`, or vendor consoles.
@@ -151,7 +151,7 @@ Cloud Run supplies `K_SERVICE` and `K_REVISION`.
 
 ### Task 9: Prove the dynamic preview lifecycle
 
-- [ ] Preview/apply `pr-1` in the staging project and verify `https://pr-1.staging.app.windrun.ai` through the unchanged staging load balancer.
+- [ ] Preview/apply `pr-1` in the staging project and verify `https://pr-1.app.staging.windrun.ai` through the unchanged staging load balancer.
 - [ ] Confirm the staging-edge stack has no diff when the preview appears.
 - [ ] Destroy/remove `pr-1`, confirm the preview route stops serving, and confirm staging remains healthy.
 - [ ] Exercise an actual same-repository pull request when repository workflow rollout is available.
@@ -168,8 +168,8 @@ Cloud Run supplies `K_SERVICE` and `K_REVISION`.
 | Target | Required result |
 | --- | --- |
 | `https://app.windrun.ai` | Production page and `/api/health` return through production LB |
-| `https://staging.app.windrun.ai` | Staging page and health return through staging LB |
-| `https://pr-1.staging.app.windrun.ai` | Preview resolves through wildcard DNS/certificate and URL-mask NEG |
+| `https://app.staging.windrun.ai` | Staging page and health return through staging LB |
+| `https://pr-1.app.staging.windrun.ai` | Preview resolves through wildcard DNS/certificate and URL-mask NEG |
 | Production `run.app` URL | Cannot bypass the load balancer ingress policy |
 | Staging `run.app` URL | Cannot bypass the load balancer ingress policy |
 | Staging edge preview after `pr-1` | No resource change |

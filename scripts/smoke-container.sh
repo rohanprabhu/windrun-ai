@@ -19,7 +19,7 @@ docker run -d --name "$container" -p "127.0.0.1:${port}:8080" \
   -e GOOGLE_CLOUD_REGION=asia-south1 \
   -e GIT_COMMIT_SHA=0123456789abcdef \
   -e PULUMI_STACK=pr-1 \
-  -e NEXT_PUBLIC_CANONICAL_HOST=pr-1.staging.app.windrun.ai \
+  -e NEXT_PUBLIC_CANONICAL_HOST=pr-1.app.staging.windrun.ai \
   -e K_SERVICE=pr-1 \
   -e K_REVISION=pr-1-00001-smoke \
   "$image" >/dev/null
@@ -53,7 +53,7 @@ node -e '
     region: "asia-south1",
     commitSha: "0123456",
     stack: "pr-1",
-    canonicalHost: "pr-1.staging.app.windrun.ai",
+    canonicalHost: "pr-1.app.staging.windrun.ai",
     service: "pr-1",
     revision: "pr-1-00001-smoke",
   };

@@ -65,19 +65,21 @@ export interface DnsCertificateResources
     CertificateResources {}
 
 function createAuthorization(
-  logicalName: "production" | "staging",
+  logicalName: string,
+  environmentName: "production" | "staging",
   domain: string,
+  physicalName: string,
   bundle: ProjectBundle,
 ) {
   return new gcp.certificatemanager.DnsAuthorization(
     `${logicalName}-dns-authorization`,
     {
       project: bundle.project.projectId,
-      name: `windrun-${logicalName}`,
+      name: physicalName,
       domain,
       location: "global",
       type: "PER_PROJECT_RECORD",
-      description: `Windrun ${logicalName} certificate authorization`,
+      description: `Windrun ${environmentName} certificate authorization`,
     },
     {
       provider: bundle.provider,
@@ -92,10 +94,10 @@ function createAuthorization(
 }
 
 function createValidationRecord(args: {
-  logicalName: "production" | "staging";
+  logicalName: string;
   authorization: gcp.certificatemanager.DnsAuthorization;
   shared: ProjectBundle;
-  dns: DnsResources;
+  zone: gcp.dns.ManagedZone;
 }) {
   const authorizationRecord = args.authorization.dnsResourceRecords.apply(
     (records) => {
@@ -112,7 +114,7 @@ function createValidationRecord(args: {
     `${args.logicalName}-validation-record`,
     {
       project: args.shared.project.projectId,
-      managedZone: args.dns.zone.name,
+      managedZone: args.zone.name,
       name: authorizationRecord.name,
       type: authorizationRecord.type,
       ttl: 30,
@@ -129,22 +131,25 @@ function createValidationRecord(args: {
 }
 
 function createManagedCertificate(args: {
-  logicalName: "production" | "staging";
+  logicalName: string;
+  environmentName: "production" | "staging";
+  physicalName: string;
   domains: string[];
   bundle: ProjectBundle;
   authorization: gcp.certificatemanager.DnsAuthorization;
   validationRecord: gcp.dns.RecordSet;
-  dns: DnsResources;
+  certificateAuthorityRecord: gcp.dns.RecordSet;
+  delegationRecords: digitalocean.DnsRecord[];
   caaValidated: import("@pulumi/pulumi").Output<boolean>;
 }) {
   return new gcp.certificatemanager.Certificate(
     `${args.logicalName}-certificate`,
     {
       project: args.bundle.project.projectId,
-      name: `windrun-${args.logicalName}`,
+      name: args.physicalName,
       location: "global",
       scope: "DEFAULT",
-      description: `Windrun ${args.logicalName} managed certificate`,
+      description: `Windrun ${args.environmentName} managed certificate`,
       managed: {
         domains: args.caaValidated.apply(() => args.domains),
         dnsAuthorizations: [args.authorization.id],
@@ -154,8 +159,8 @@ function createManagedCertificate(args: {
       provider: args.bundle.provider,
       dependsOn: [
         args.validationRecord,
-        args.dns.certificateAuthorityRecord,
-        ...args.dns.delegationRecords,
+        args.certificateAuthorityRecord,
+        ...args.delegationRecords,
       ],
     },
   );
@@ -215,6 +220,7 @@ export function createDnsCertificateResources(args: {
   productionAddress: gcp.compute.GlobalAddress;
   stagingAddress: gcp.compute.GlobalAddress;
   digitalOceanProvider: digitalocean.Provider;
+  allowStagingCertificateReplacement: boolean;
 }): DnsCertificateResources {
   const dns = createDnsResources({
     shared: args.shared,
@@ -240,42 +246,91 @@ export function createDnsCertificateResources(args: {
 
   const productionAuthorization = createAuthorization(
     "production",
+    "production",
     HOSTNAMES.production,
+    "windrun-production",
     args.production,
   );
+  const legacyStagingAuthorization = args.allowStagingCertificateReplacement
+    ? createAuthorization(
+        "staging",
+        "staging",
+        // Legacy hostname retained only during the protected two-phase
+        // migration from staging.app.windrun.ai to app.staging.windrun.ai.
+        "staging.app.windrun.ai",
+        "windrun-staging",
+        args.staging,
+      )
+    : undefined;
   const stagingAuthorization = createAuthorization(
+    "staging-app",
     "staging",
     HOSTNAMES.staging,
+    "windrun-staging-app",
     args.staging,
   );
   const productionValidationRecord = createValidationRecord({
     logicalName: "production",
     authorization: productionAuthorization,
     shared: args.shared,
-    dns,
+    zone: dns.productionZone,
   });
+  const legacyStagingValidationRecord =
+    legacyStagingAuthorization === undefined
+      ? undefined
+      : createValidationRecord({
+          logicalName: "staging",
+          authorization: legacyStagingAuthorization,
+          shared: args.shared,
+          zone: dns.productionZone,
+        });
   const stagingValidationRecord = createValidationRecord({
-    logicalName: "staging",
+    logicalName: "staging-app",
     authorization: stagingAuthorization,
     shared: args.shared,
-    dns,
+    zone: dns.stagingZone,
   });
   const productionCertificate = createManagedCertificate({
     logicalName: "production",
+    environmentName: "production",
+    physicalName: "windrun-production",
     domains: [HOSTNAMES.production],
     bundle: args.production,
     authorization: productionAuthorization,
     validationRecord: productionValidationRecord,
-    dns,
+    certificateAuthorityRecord: dns.productionCertificateAuthorityRecord,
+    delegationRecords: dns.delegationRecords,
     caaValidated,
   });
+  if (legacyStagingAuthorization !== undefined) {
+    if (legacyStagingValidationRecord === undefined) {
+      throw new Error("legacy staging validation record was not created");
+    }
+    createManagedCertificate({
+      logicalName: "staging",
+      environmentName: "staging",
+      physicalName: "windrun-staging",
+      // Legacy certificate retained only long enough for Certificate Map
+      // entries to move to staging-app-certificate.
+      domains: ["staging.app.windrun.ai", "*.staging.app.windrun.ai"],
+      bundle: args.staging,
+      authorization: legacyStagingAuthorization,
+      validationRecord: legacyStagingValidationRecord,
+      certificateAuthorityRecord: dns.productionCertificateAuthorityRecord,
+      delegationRecords: dns.delegationRecords,
+      caaValidated,
+    });
+  }
   const stagingCertificate = createManagedCertificate({
-    logicalName: "staging",
+    logicalName: "staging-app",
+    environmentName: "staging",
+    physicalName: "windrun-staging-app",
     domains: [HOSTNAMES.staging, `*.${HOSTNAMES.staging}`],
     bundle: args.staging,
     authorization: stagingAuthorization,
     validationRecord: stagingValidationRecord,
-    dns,
+    certificateAuthorityRecord: dns.stagingCertificateAuthorityRecord,
+    delegationRecords: dns.delegationRecords,
     caaValidated,
   });
   const productionCertificateMap = createCertificateMap(

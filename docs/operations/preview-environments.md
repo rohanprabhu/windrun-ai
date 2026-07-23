@@ -24,8 +24,8 @@ For PR number `<number>`, all names are deterministic:
 ```text
 Pulumi stack: <LOGIN>/windrun-ai/pr-<number>
 Cloud Run service: pr-<number>
-URL: https://pr-<number>.staging.app.windrun.ai
-Health URL: https://pr-<number>.staging.app.windrun.ai/api/health
+URL: https://pr-<number>.app.staging.windrun.ai
+Health URL: https://pr-<number>.app.staging.windrun.ai/api/health
 ```
 
 The staging wildcard DNS record, certificate, URL map, backend, and serverless NEG URL mask already exist in `staging-edge`. Creating or removing a preview changes only its `pr-<number>` application stack; it does not update edge or DNS resources.
@@ -37,7 +37,7 @@ The credentialed deploy job checks out `refs/heads/main` into `platform` and the
 The job displays `pulumi preview` before `pulumi up` and sets only the exact preview stack kind, PR number, and merge SHA. It then runs:
 
 ```bash
-node platform/scripts/ci/smoke-test.mjs "https://pr-<number>.staging.app.windrun.ai/api/health" --attempts 30 --delay-ms 10000
+node platform/scripts/ci/smoke-test.mjs "https://pr-<number>.app.staging.windrun.ai/api/health" --attempts 30 --delay-ms 10000
 ```
 
 The smoke check allows at most 30 attempts separated by 10 seconds. Network failures and HTTP `404`, `429`, `500`, `502`, `503`, and `504` are retryable. Success requires HTTP 200 with JSON whose `ok` field is exactly `true`; malformed JSON, a false health value, or another status stops immediately.

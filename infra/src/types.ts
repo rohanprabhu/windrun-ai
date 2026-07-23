@@ -20,6 +20,8 @@ export interface RawStackConfig {
   gitCommitSha?: string;
   pullRequestNumber?: number;
   allowProjectDeletion?: boolean;
+  allowStagingCertificateReplacement?: boolean;
+  allowStagingPreviewNegReplacement?: boolean;
   enablePulumiGithubOidc?: boolean;
   productionCiEnabled?: boolean;
   stagingCiEnabled?: boolean;

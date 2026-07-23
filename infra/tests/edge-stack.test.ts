@@ -143,13 +143,14 @@ describe("stable Cloud Run edge stacks", () => {
       cloudRun: { service: "staging" },
     });
     expect(
-      negs.find((resource) => resource.name === "staging-preview-neg")?.inputs,
+      negs.find((resource) => resource.name === "staging-app-preview-neg")
+        ?.inputs,
     ).toEqual({
       project: fixture.projectId,
-      name: "windrun-staging-preview",
+      name: "windrun-staging-preview-app",
       region: REGION,
       networkEndpointType: "SERVERLESS",
-      cloudRun: { urlMask: "<service>.staging.app.windrun.ai" },
+      cloudRun: { urlMask: "<service>.app.staging.windrun.ai" },
     });
     expect(
       negs.filter(
@@ -183,7 +184,7 @@ describe("stable Cloud Run edge stacks", () => {
       name: "windrun-staging-preview",
       protocol: "HTTP",
       loadBalancingScheme: "EXTERNAL_MANAGED",
-      backends: [{ group: "staging-preview-neg-id" }],
+      backends: [{ group: "staging-app-preview-neg-id" }],
     });
 
     const httpsMap = resourcesOfType("gcp:compute/uRLMap:URLMap").find(
@@ -384,7 +385,7 @@ function assertDependencyGraph(
   if (includePreview) {
     expectDependencies(
       "gcp:compute/regionNetworkEndpointGroup:RegionNetworkEndpointGroup",
-      "staging-preview-neg",
+      "staging-app-preview-neg",
       [],
     );
     expectDependencies(
@@ -393,7 +394,7 @@ function assertDependencyGraph(
       [
         dependency(
           "gcp:compute/regionNetworkEndpointGroup:RegionNetworkEndpointGroup",
-          "staging-preview-neg",
+          "staging-app-preview-neg",
         ),
       ],
     );

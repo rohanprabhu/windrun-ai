@@ -338,7 +338,7 @@ For `ready`, generate:
 
 ```markdown
 <!-- windrun-preview -->
-Windrun preview is ready: https://pr-42.staging.app.windrun.ai
+Windrun preview is ready: https://pr-42.app.staging.windrun.ai
 
 [Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)
 ```
@@ -475,7 +475,7 @@ provider variable: GCP_WIF_PROVIDER_STAGING
 service-account variable: GCP_SERVICE_ACCOUNT_STAGING
 stack: ${{ vars.PULUMI_ORGANIZATION }}/windrun-ai/staging
 stackKind: staging
-health URL: https://staging.app.windrun.ai/api/health
+health URL: https://app.staging.windrun.ai/api/health
 ```
 
 - [ ] **Step 5: Validate syntax and policy**
@@ -572,7 +572,7 @@ deploy-preview:
   with:
     pr-number: ${{ github.event.pull_request.number }}
     merge-sha: ${{ github.event.pull_request.merge_commit_sha }}
-    preview-url: https://pr-${{ github.event.pull_request.number }}.staging.app.windrun.ai
+    preview-url: https://pr-${{ github.event.pull_request.number }}.app.staging.windrun.ai
 ```
 
 Its close job likewise has no `steps` and calls:
@@ -592,7 +592,7 @@ destroy-preview:
   with:
     pr-number: ${{ github.event.pull_request.number }}
     base-sha: ${{ github.event.pull_request.base.sha }}
-    preview-url: https://pr-${{ github.event.pull_request.number }}.staging.app.windrun.ai
+    preview-url: https://pr-${{ github.event.pull_request.number }}.app.staging.windrun.ai
 ```
 
 Do not add `secrets` to either call. The caller delegates `id-token: write` because GitHub does not let a called workflow elevate permissions, but only the main-pinned called workflow may request or exchange the token.
@@ -616,7 +616,7 @@ on:
         required: true
 ```
 
-Its sole job must recheck `github.event_name == 'pull_request'`, `github.event.action` is one of `opened|reopened|synchronize`, `github.event.pull_request.base.ref == 'main'`, `github.event.pull_request.base.repo.id == github.event.repository.id`, immutable `github.event.pull_request.head.repo.id == github.event.repository.id`, `github.event.pull_request.head.repo.full_name == github.repository`, `inputs.pr-number == github.event.pull_request.number`, `inputs.merge-sha == github.event.pull_request.merge_commit_sha`, and `inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)` before any step. It owns `environment: preview` and:
+Its sole job must recheck `github.event_name == 'pull_request'`, `github.event.action` is one of `opened|reopened|synchronize`, `github.event.pull_request.base.ref == 'main'`, `github.event.pull_request.base.repo.id == github.event.repository.id`, immutable `github.event.pull_request.head.repo.id == github.event.repository.id`, `github.event.pull_request.head.repo.full_name == github.repository`, `inputs.pr-number == github.event.pull_request.number`, `inputs.merge-sha == github.event.pull_request.merge_commit_sha`, and `inputs.preview-url == format('https://pr-{0}.app.staging.windrun.ai', github.event.pull_request.number)` before any step. It owns `environment: preview` and:
 
 ```yaml
 concurrency:
@@ -1148,7 +1148,7 @@ Run:
 
 ```bash
 curl --fail --silent https://app.windrun.ai/api/health
-curl --fail --silent https://staging.app.windrun.ai/api/health
+curl --fail --silent https://app.staging.windrun.ai/api/health
 ```
 
 Expected: each response is JSON containing `"ok":true`.

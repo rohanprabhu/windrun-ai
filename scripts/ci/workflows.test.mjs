@@ -43,7 +43,7 @@ const fixtures = [
     providerVariable: 'GCP_WIF_PROVIDER_STAGING',
     serviceAccountVariable: 'GCP_SERVICE_ACCOUNT_STAGING',
     stackKind: 'staging',
-    healthUrl: 'https://staging.app.windrun.ai/api/health',
+    healthUrl: 'https://app.staging.windrun.ai/api/health',
   },
 ]
 
@@ -280,7 +280,7 @@ test('pull request caller is uncredentialed and delegates only same-repository e
     'pr-number': '${{ github.event.pull_request.number }}',
     'merge-sha': '${{ github.event.pull_request.merge_commit_sha }}',
     'preview-url':
-      'https://pr-${{ github.event.pull_request.number }}.staging.app.windrun.ai',
+      'https://pr-${{ github.event.pull_request.number }}.app.staging.windrun.ai',
   })
   assertIncludesEvery(workflow.jobs['destroy-preview'].if, [
     "github.event.action == 'closed'",
@@ -289,7 +289,7 @@ test('pull request caller is uncredentialed and delegates only same-repository e
     'pr-number': '${{ github.event.pull_request.number }}',
     'base-sha': '${{ github.event.pull_request.base.sha }}',
     'preview-url':
-      'https://pr-${{ github.event.pull_request.number }}.staging.app.windrun.ai',
+      'https://pr-${{ github.event.pull_request.number }}.app.staging.windrun.ai',
   })
 })
 
@@ -338,7 +338,7 @@ test('preview deploy revalidates immutable event data before trusted steps', () 
     'github.event.pull_request.head.repo.full_name == github.repository',
     'inputs.pr-number == github.event.pull_request.number',
     'inputs.merge-sha == github.event.pull_request.merge_commit_sha',
-    "inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)",
+    "inputs.preview-url == format('https://pr-{0}.app.staging.windrun.ai', github.event.pull_request.number)",
   ])
 
   assertImmutableExternalActions(workflow)
@@ -437,7 +437,7 @@ test('preview destroy shares the queue and runs only trusted main code', () => {
     'github.event.pull_request.head.repo.full_name == github.repository',
     'inputs.pr-number == github.event.pull_request.number',
     'inputs.base-sha == github.event.pull_request.base.sha',
-    "inputs.preview-url == format('https://pr-{0}.staging.app.windrun.ai', github.event.pull_request.number)",
+    "inputs.preview-url == format('https://pr-{0}.app.staging.windrun.ai', github.event.pull_request.number)",
   ])
 
   assertImmutableExternalActions(workflow)

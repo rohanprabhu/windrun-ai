@@ -23,6 +23,12 @@ function readStackContext(config: pulumi.Config): StackContext {
     gitCommitSha: config.get("gitCommitSha"),
     pullRequestNumber: config.getNumber("pullRequestNumber"),
     allowProjectDeletion: config.getBoolean("allowProjectDeletion"),
+    allowStagingCertificateReplacement: config.getBoolean(
+      "allowStagingCertificateReplacement",
+    ),
+    allowStagingPreviewNegReplacement: config.getBoolean(
+      "allowStagingPreviewNegReplacement",
+    ),
     enablePulumiGithubOidc:
       config.getBoolean("enablePulumiGithubOidc"),
     productionCiEnabled: config.getBoolean("productionCiEnabled"),
@@ -49,6 +55,8 @@ function run() {
       return createFoundationStack({
         allowProjectDeletion:
           config.getBoolean("allowProjectDeletion") ?? false,
+        allowStagingCertificateReplacement:
+          config.getBoolean("allowStagingCertificateReplacement") ?? false,
         digitalOceanToken: config.requireSecret("digitalOceanToken"),
       });
 
@@ -166,6 +174,8 @@ function run() {
         globalAddress: foundation.stagingGlobalIp,
         certificateMapId: foundation.stagingCertificateMapId,
         certificateStatus: foundation.stagingCertificateStatus,
+        allowStagingPreviewNegReplacement:
+          config.getBoolean("allowStagingPreviewNegReplacement") ?? false,
       });
     }
   }

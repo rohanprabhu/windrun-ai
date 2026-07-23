@@ -10,6 +10,7 @@ export interface EdgeStackArgs {
   globalAddress: pulumi.Input<string>;
   certificateMapId: pulumi.Input<string>;
   certificateStatus: pulumi.Input<string>;
+  allowStagingPreviewNegReplacement?: boolean;
 }
 
 export interface EdgeStackOutputs {
@@ -184,9 +185,20 @@ function createStagingEdge(args: EdgeStackArgs): EdgeStackOutputs {
     provider: args.provider,
     cloudRun: { service: SERVICE_NAMES.staging },
   });
+  if (args.allowStagingPreviewNegReplacement === true) {
+    createNeg({
+      logicalName: "staging-preview-neg",
+      physicalName: "windrun-staging-preview",
+      projectId: args.projectId,
+      provider: args.provider,
+      // Legacy URL mask retained only during the protected two-phase
+      // migration from staging.app.windrun.ai to app.staging.windrun.ai.
+      cloudRun: { urlMask: "<service>.staging.app.windrun.ai" },
+    });
+  }
   const previewNeg = createNeg({
-    logicalName: "staging-preview-neg",
-    physicalName: "windrun-staging-preview",
+    logicalName: "staging-app-preview-neg",
+    physicalName: "windrun-staging-preview-app",
     projectId: args.projectId,
     provider: args.provider,
     cloudRun: { urlMask: `<service>.${HOSTNAMES.previewSuffix}` },

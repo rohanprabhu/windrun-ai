@@ -9,7 +9,7 @@ import {
 const token = 'ghs_test-secret-value'
 const repository = 'rohanprabhu/windrun-ai'
 const pullNumber = 42
-const previewUrl = 'https://pr-42.staging.app.windrun.ai'
+const previewUrl = 'https://pr-42.app.staging.windrun.ai'
 const runUrl =
   'https://github.com/rohanprabhu/windrun-ai/actions/runs/123'
 
@@ -110,7 +110,7 @@ test('creates one preview comment when the marker is absent', async () => {
   const createdComment = githubComment({
     id: 101,
     body:
-      '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.staging.app.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
+      '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.app.staging.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
   })
   const responses = [jsonResponse([]), jsonResponse(createdComment, 201)]
   const fetchImpl = async (url, init) => {
@@ -146,7 +146,7 @@ test('creates one preview comment when the marker is absent', async () => {
   assert.equal(calls[1].init.method, 'POST')
   assert.deepEqual(JSON.parse(calls[1].init.body), {
     body:
-      '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.staging.app.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
+      '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.app.staging.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
   })
   assert.deepEqual(calls[1].init.headers, {
     ...calls[0].init.headers,
@@ -163,7 +163,7 @@ test('updates the existing preview comment when the marker is present', async ()
   const updatedComment = githubComment({
     id: 202,
     body:
-      '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.staging.app.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
+      '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.app.staging.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
   })
   const responses = [
     jsonResponse([existingComment]),
@@ -192,7 +192,7 @@ test('updates the existing preview comment when the marker is present', async ()
   assert.equal(calls[1].init.method, 'PATCH')
   assert.deepEqual(JSON.parse(calls[1].init.body), {
     body:
-      '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.staging.app.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
+      '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.app.staging.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
   })
   assert.deepEqual(calls[1].init.headers, {
     ...calls[0].init.headers,
@@ -447,7 +447,7 @@ test('leaves a different bot comment untouched', async () => {
   const createdComment = githubComment({
     id: 304,
     body:
-      '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.staging.app.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
+      '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.app.staging.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
   })
   const responses = [
     jsonResponse([unrelatedComment]),
@@ -555,7 +555,7 @@ test('never exposes the token in a generated body or thrown error', async () => 
       githubComment({
         id: 404,
         body:
-          '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.staging.app.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
+          '<!-- windrun-preview -->\nWindrun preview is ready: https://pr-42.app.staging.windrun.ai\n\n[Deployment run](https://github.com/rohanprabhu/windrun-ai/actions/runs/123)',
       }),
       201,
     ),

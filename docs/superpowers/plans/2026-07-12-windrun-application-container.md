@@ -213,7 +213,7 @@ describe("readDeploymentStatus", () => {
       GOOGLE_CLOUD_REGION: "asia-south1",
       GIT_COMMIT_SHA: "0123456789abcdef",
       PULUMI_STACK: "pr-42",
-      NEXT_PUBLIC_CANONICAL_HOST: "pr-42.staging.app.windrun.ai",
+      NEXT_PUBLIC_CANONICAL_HOST: "pr-42.app.staging.windrun.ai",
       K_SERVICE: "pr-42",
       K_REVISION: "pr-42-00007-abc",
       SECRET_VALUE: "never-return-this"
@@ -223,7 +223,7 @@ describe("readDeploymentStatus", () => {
       region: "asia-south1",
       commitSha: "0123456",
       stack: "pr-42",
-      canonicalHost: "pr-42.staging.app.windrun.ai",
+      canonicalHost: "pr-42.app.staging.windrun.ai",
       service: "pr-42",
       revision: "pr-42-00007-abc"
     });
@@ -378,7 +378,7 @@ beforeEach(() => {
     json: async () => ({
       environment: "staging", projectId: "windrun-ai-staging-20260712",
       region: "asia-south1", commitSha: "abcdef0",
-      stack: "staging", canonicalHost: "staging.app.windrun.ai",
+      stack: "staging", canonicalHost: "app.staging.windrun.ai",
       service: "staging", revision: "staging-00001",
       requestId: "11111111-1111-1111-1111-111111111111",
       serverTime: "2026-07-12T00:00:00.000Z"
@@ -391,7 +391,7 @@ it("pings the deployment and exposes the request id", async () => {
   render(<LaunchConsole initialStatus={{
     environment: "staging", projectId: "windrun-ai-staging-20260712",
     region: "asia-south1", commitSha: "abcdef0",
-    stack: "staging", canonicalHost: "staging.app.windrun.ai",
+    stack: "staging", canonicalHost: "app.staging.windrun.ai",
     service: "staging", revision: "staging-00001"
   }} />);
   expect(screen.getByText("Project ID")).toBeInTheDocument();
@@ -532,7 +532,7 @@ docker run --rm -d --name "$container" -p 18080:8080 \
   -e GOOGLE_CLOUD_REGION=asia-south1 \
   -e GIT_COMMIT_SHA=0123456789abcdef \
   -e PULUMI_STACK=pr-1 \
-  -e NEXT_PUBLIC_CANONICAL_HOST=pr-1.staging.app.windrun.ai \
+  -e NEXT_PUBLIC_CANONICAL_HOST=pr-1.app.staging.windrun.ai \
   -e K_SERVICE=pr-1 \
   -e K_REVISION=pr-1-00001-smoke \
   "$image"
@@ -557,7 +557,7 @@ node -e '
     region: "asia-south1",
     commitSha: "0123456",
     stack: "pr-1",
-    canonicalHost: "pr-1.staging.app.windrun.ai",
+    canonicalHost: "pr-1.app.staging.windrun.ai",
     service: "pr-1",
     revision: "pr-1-00001-smoke",
   };

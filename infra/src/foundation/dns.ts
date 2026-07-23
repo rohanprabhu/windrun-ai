@@ -7,12 +7,14 @@ import type { ProjectBundle } from "./projects";
 import { requireProjectService } from "./services";
 
 export interface DnsResources {
-  zone: gcp.dns.ManagedZone;
+  productionZone: gcp.dns.ManagedZone;
+  stagingZone: gcp.dns.ManagedZone;
   delegationRecords: digitalocean.DnsRecord[];
   productionAddressRecord: gcp.dns.RecordSet;
   stagingAddressRecord: gcp.dns.RecordSet;
   previewAddressRecord: gcp.dns.RecordSet;
-  certificateAuthorityRecord: gcp.dns.RecordSet;
+  productionCertificateAuthorityRecord: gcp.dns.RecordSet;
+  stagingCertificateAuthorityRecord: gcp.dns.RecordSet;
 }
 
 export function createDigitalOceanProvider(token?: pulumi.Input<string>) {
@@ -33,12 +35,12 @@ export function createDnsResources(args: {
     args.shared.services,
     "dns.googleapis.com",
   );
-  const zone = new gcp.dns.ManagedZone(
+  const productionZone = new gcp.dns.ManagedZone(
     "app-zone",
     {
       project: args.shared.project.projectId,
       name: "windrun-app",
-      dnsName: HOSTNAMES.delegatedZone,
+      dnsName: HOSTNAMES.productionZone,
       description: "Delegated public zone for Windrun applications",
       visibility: "public",
       forceDestroy: true,
@@ -46,31 +48,55 @@ export function createDnsResources(args: {
     { provider: args.shared.provider, dependsOn: [dnsApi] },
   );
 
-  const assignedNameServers = zone.nameServers.apply((nameServers) => {
-    if (nameServers.length !== 4) {
-      throw new Error(
-        `Cloud DNS must assign exactly four name servers, received ${nameServers.length}`,
-      );
-    }
-    return nameServers;
-  });
-
-  const delegationRecords = Array.from({ length: 4 }, (_, index) =>
-    new digitalocean.DnsRecord(
-      `app-ns-${index + 1}`,
-      {
-        domain: HOSTNAMES.parentZone,
-        type: "NS",
-        name: "app",
-        ttl: 1800,
-        value: assignedNameServers.apply((nameServers) => nameServers[index]),
-      },
-      { provider: args.digitalOceanProvider, dependsOn: [zone] },
-    ),
+  const stagingZone = new gcp.dns.ManagedZone(
+    "staging-zone",
+    {
+      project: args.shared.project.projectId,
+      name: "windrun-staging",
+      dnsName: HOSTNAMES.stagingZone,
+      description: "Delegated public zone for Windrun staging applications",
+      visibility: "public",
+      forceDestroy: true,
+    },
+    { provider: args.shared.provider, dependsOn: [dnsApi] },
   );
+
+  function createDelegationRecords(
+    label: "app" | "staging",
+    zone: gcp.dns.ManagedZone,
+  ) {
+    const assignedNameServers = zone.nameServers.apply((nameServers) => {
+      if (nameServers.length !== 4) {
+        throw new Error(
+          `Cloud DNS ${label} zone must assign exactly four name servers, received ${nameServers.length}`,
+        );
+      }
+      return nameServers;
+    });
+
+    return Array.from({ length: 4 }, (_, index) =>
+      new digitalocean.DnsRecord(
+        `${label}-ns-${index + 1}`,
+        {
+          domain: HOSTNAMES.parentZone,
+          type: "NS",
+          name: label,
+          ttl: 1800,
+          value: assignedNameServers.apply((nameServers) => nameServers[index]),
+        },
+        { provider: args.digitalOceanProvider, dependsOn: [zone] },
+      ),
+    );
+  }
+
+  const delegationRecords = [
+    ...createDelegationRecords("app", productionZone),
+    ...createDelegationRecords("staging", stagingZone),
+  ];
 
   function addressRecord(
     logicalName: string,
+    zone: gcp.dns.ManagedZone,
     name: string,
     address: pulumi.Input<string>,
   ) {
@@ -90,39 +116,58 @@ export function createDnsResources(args: {
 
   const productionAddressRecord = addressRecord(
     "production-a-record",
+    productionZone,
     `${HOSTNAMES.production}.`,
     args.productionAddress.address,
   );
   const stagingAddressRecord = addressRecord(
     "staging-a-record",
+    stagingZone,
     `${HOSTNAMES.staging}.`,
     args.stagingAddress.address,
   );
   const previewAddressRecord = addressRecord(
     "preview-a-record",
+    stagingZone,
     `*.${HOSTNAMES.staging}.`,
     args.stagingAddress.address,
   );
 
-  const certificateAuthorityRecord = new gcp.dns.RecordSet(
-    "certificate-authority-record",
-    {
-      project: args.shared.project.projectId,
-      managedZone: zone.name,
-      name: HOSTNAMES.delegatedZone,
-      type: "CAA",
-      ttl: 300,
-      rrdatas: ['0 issue "pki.goog"', '0 issuewild "pki.goog"'],
-    },
-    { provider: args.shared.provider, dependsOn: [dnsApi, zone] },
-  );
+  function certificateAuthorityRecord(
+    logicalName: string,
+    zone: gcp.dns.ManagedZone,
+    zoneName: string,
+  ) {
+    return new gcp.dns.RecordSet(
+      logicalName,
+      {
+        project: args.shared.project.projectId,
+        managedZone: zone.name,
+        name: zoneName,
+        type: "CAA",
+        ttl: 300,
+        rrdatas: ['0 issue "pki.goog"', '0 issuewild "pki.goog"'],
+      },
+      { provider: args.shared.provider, dependsOn: [dnsApi, zone] },
+    );
+  }
 
   return {
-    zone,
+    productionZone,
+    stagingZone,
     delegationRecords,
     productionAddressRecord,
     stagingAddressRecord,
     previewAddressRecord,
-    certificateAuthorityRecord,
+    productionCertificateAuthorityRecord: certificateAuthorityRecord(
+      "certificate-authority-record",
+      productionZone,
+      HOSTNAMES.productionZone,
+    ),
+    stagingCertificateAuthorityRecord: certificateAuthorityRecord(
+      "staging-certificate-authority-record",
+      stagingZone,
+      HOSTNAMES.stagingZone,
+    ),
   };
 }

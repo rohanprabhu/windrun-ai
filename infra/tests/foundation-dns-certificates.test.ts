@@ -68,17 +68,20 @@ async function createFixture() {
     productionAddress: core.productionAddress,
     stagingAddress: core.stagingAddress,
     digitalOceanProvider,
+    allowStagingCertificateReplacement: false,
   });
 
   await Promise.all([
-    resolveOutput(dnsCertificates.zone.urn),
+    resolveOutput(dnsCertificates.productionZone.urn),
+    resolveOutput(dnsCertificates.stagingZone.urn),
     ...dnsCertificates.delegationRecords.map((record) =>
       resolveOutput(record.urn),
     ),
     resolveOutput(dnsCertificates.productionAddressRecord.urn),
     resolveOutput(dnsCertificates.stagingAddressRecord.urn),
     resolveOutput(dnsCertificates.previewAddressRecord.urn),
-    resolveOutput(dnsCertificates.certificateAuthorityRecord.urn),
+    resolveOutput(dnsCertificates.productionCertificateAuthorityRecord.urn),
+    resolveOutput(dnsCertificates.stagingCertificateAuthorityRecord.urn),
     resolveOutput(dnsCertificates.productionAuthorization.urn),
     resolveOutput(dnsCertificates.stagingAuthorization.urn),
     resolveOutput(dnsCertificates.productionValidationRecord.urn),
@@ -101,33 +104,50 @@ beforeEach(async () => {
 });
 
 describe("shared DNS and certificate lifecycle", () => {
-  it("delegates app.windrun.ai and routes production, staging, and previews", async () => {
+  it("delegates production and staging zones and routes their app hosts", async () => {
     await createFixture();
 
     const zones = resourcesOfType("gcp:dns/managedZone:ManagedZone");
-    expect(zones).toHaveLength(1);
-    expect(zones[0].inputs).toMatchObject({
-      project: PROJECT_IDS.shared,
-      name: "windrun-app",
-      dnsName: "app.windrun.ai.",
-      visibility: "public",
-      forceDestroy: true,
-    });
+    expect(zones).toHaveLength(2);
+    expect(zones.map((resource) => resource.inputs)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          project: PROJECT_IDS.shared,
+          name: "windrun-app",
+          dnsName: "app.windrun.ai.",
+          visibility: "public",
+          forceDestroy: true,
+        }),
+        expect.objectContaining({
+          project: PROJECT_IDS.shared,
+          name: "windrun-staging",
+          dnsName: "staging.windrun.ai.",
+          visibility: "public",
+          forceDestroy: true,
+        }),
+      ]),
+    );
 
     const delegation = resourcesOfType(
       "digitalocean:index/dnsRecord:DnsRecord",
     );
-    expect(delegation).toHaveLength(4);
-    expect(delegation.map((resource) => resource.inputs.value)).toEqual([
-      ...MOCK_NAME_SERVERS,
-    ]);
-    for (const record of delegation) {
-      expect(record.inputs).toMatchObject({
-        domain: "windrun.ai",
-        type: "NS",
-        name: "app",
-        ttl: 1800,
-      });
+    expect(delegation).toHaveLength(8);
+    for (const delegatedName of ["app", "staging"]) {
+      const records = delegation.filter(
+        (record) => record.inputs.name === delegatedName,
+      );
+      expect(records).toHaveLength(4);
+      expect(records.map((resource) => resource.inputs.value)).toEqual([
+        ...MOCK_NAME_SERVERS,
+      ]);
+      for (const record of records) {
+        expect(record.inputs).toMatchObject({
+          domain: "windrun.ai",
+          type: "NS",
+          name: delegatedName,
+          ttl: 1800,
+        });
+      }
     }
 
     const recordSets = resourcesOfType("gcp:dns/recordSet:RecordSet");
@@ -143,7 +163,7 @@ describe("shared DNS and certificate lifecycle", () => {
       recordSets.find((resource) => resource.name === "staging-a-record")
         ?.inputs,
     ).toMatchObject({
-      name: "staging.app.windrun.ai.",
+      name: "app.staging.windrun.ai.",
       type: "A",
       rrdatas: [MOCK_STAGING_IP],
     });
@@ -151,7 +171,7 @@ describe("shared DNS and certificate lifecycle", () => {
       recordSets.find((resource) => resource.name === "preview-a-record")
         ?.inputs,
     ).toMatchObject({
-      name: "*.staging.app.windrun.ai.",
+      name: "*.app.staging.windrun.ai.",
       type: "A",
       rrdatas: [MOCK_STAGING_IP],
     });
@@ -161,6 +181,15 @@ describe("shared DNS and certificate lifecycle", () => {
       )?.inputs,
     ).toMatchObject({
       name: "app.windrun.ai.",
+      type: "CAA",
+      rrdatas: ['0 issue "pki.goog"', '0 issuewild "pki.goog"'],
+    });
+    expect(
+      recordSets.find(
+        (resource) => resource.name === "staging-certificate-authority-record",
+      )?.inputs,
+    ).toMatchObject({
+      name: "staging.windrun.ai.",
       type: "CAA",
       rrdatas: ['0 issue "pki.goog"', '0 issuewild "pki.goog"'],
     });
@@ -185,7 +214,7 @@ describe("shared DNS and certificate lifecycle", () => {
     });
     expect(
       authorizations.find(
-        (resource) => resource.name === "staging-dns-authorization",
+        (resource) => resource.name === "staging-app-dns-authorization",
       )?.inputs,
     ).toMatchObject({
       project: PROJECT_IDS.staging,
@@ -206,13 +235,13 @@ describe("shared DNS and certificate lifecycle", () => {
       ],
     });
     const stagingValidation = recordSets.find(
-      (resource) => resource.name === "staging-validation-record",
+      (resource) => resource.name === "staging-app-validation-record",
     );
     expect(stagingValidation?.inputs).toMatchObject({
-      name: "_acme-challenge.staging-dns-authorization.app.windrun.ai.",
+      name: "_acme-challenge.staging-app-dns-authorization.app.staging.windrun.ai.",
       type: "CNAME",
       rrdatas: [
-        "staging-dns-authorization.authorize.certificatemanager.goog.",
+        "staging-app-dns-authorization.authorize.certificatemanager.goog.",
       ],
     });
 
@@ -227,11 +256,11 @@ describe("shared DNS and certificate lifecycle", () => {
       dnsAuthorizations: ["production-dns-authorization-id"],
     });
     const stagingCertificate = certificates.find(
-      (resource) => resource.name === "staging-certificate",
+      (resource) => resource.name === "staging-app-certificate",
     );
     expect(stagingCertificate?.inputs.managed).toMatchObject({
       domains: [HOSTNAMES.staging, `*.${HOSTNAMES.staging}`],
-      dnsAuthorizations: ["staging-dns-authorization-id"],
+      dnsAuthorizations: ["staging-app-dns-authorization-id"],
     });
 
     for (const [logicalName, certificate] of [
@@ -248,7 +277,9 @@ describe("shared DNS and certificate lifecycle", () => {
       expect(certificate?.dependencies).toContain(
         mockUrn(
           "gcp:dns/recordSet:RecordSet",
-          `${logicalName}-validation-record`,
+          logicalName === "production"
+            ? "production-validation-record"
+            : "staging-app-validation-record",
           "foundation-dns-test",
         ),
       );
@@ -261,10 +292,23 @@ describe("shared DNS and certificate lifecycle", () => {
           ),
         );
       }
+      if (logicalName === "staging") {
+        for (let index = 1; index <= 4; index += 1) {
+          expect(certificate?.dependencies).toContain(
+            mockUrn(
+              "digitalocean:index/dnsRecord:DnsRecord",
+              `staging-ns-${index}`,
+              "foundation-dns-test",
+            ),
+          );
+        }
+      }
       expect(certificate?.dependencies).toContain(
         mockUrn(
           "gcp:dns/recordSet:RecordSet",
-          "certificate-authority-record",
+          logicalName === "production"
+            ? "certificate-authority-record"
+            : "staging-certificate-authority-record",
           "foundation-dns-test",
         ),
       );
@@ -280,7 +324,7 @@ describe("shared DNS and certificate lifecycle", () => {
     expect(stagingValidation?.dependencies).toContain(
       mockUrn(
         "gcp:certificatemanager/dnsAuthorization:DnsAuthorization",
-        "staging-dns-authorization",
+        "staging-app-dns-authorization",
         "foundation-dns-test",
       ),
     );
@@ -290,9 +334,9 @@ describe("shared DNS and certificate lifecycle", () => {
     );
     expect(entries).toHaveLength(3);
     expect(entries.map((resource) => resource.inputs.hostname).sort()).toEqual([
-      "*.staging.app.windrun.ai",
+      "*.app.staging.windrun.ai",
+      "app.staging.windrun.ai",
       "app.windrun.ai",
-      "staging.app.windrun.ai",
     ]);
     for (const entry of entries) {
       const logicalName = entry.name.startsWith("production")
@@ -301,7 +345,9 @@ describe("shared DNS and certificate lifecycle", () => {
       expect(entry.dependencies).toContain(
         mockUrn(
           "gcp:certificatemanager/certificate:Certificate",
-          `${logicalName}-certificate`,
+          logicalName === "production"
+            ? "production-certificate"
+            : "staging-app-certificate",
           "foundation-dns-test",
         ),
       );

@@ -11,7 +11,7 @@ describe("readDeploymentStatus", () => {
         GOOGLE_CLOUD_REGION: "asia-south1",
         GIT_COMMIT_SHA: "0123456789abcdef",
         PULUMI_STACK: "pr-42",
-        NEXT_PUBLIC_CANONICAL_HOST: "pr-42.staging.app.windrun.ai",
+        NEXT_PUBLIC_CANONICAL_HOST: "pr-42.app.staging.windrun.ai",
         K_SERVICE: "pr-42",
         K_REVISION: "pr-42-00007-abc",
         SECRET_VALUE: "never-return-this",
@@ -22,7 +22,7 @@ describe("readDeploymentStatus", () => {
       region: "asia-south1",
       commitSha: "0123456",
       stack: "pr-42",
-      canonicalHost: "pr-42.staging.app.windrun.ai",
+      canonicalHost: "pr-42.app.staging.windrun.ai",
       service: "pr-42",
       revision: "pr-42-00007-abc",
     });

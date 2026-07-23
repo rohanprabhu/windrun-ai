@@ -11,7 +11,7 @@ const stagingStatus: DeploymentStatus = {
   region: "asia-south1",
   commitSha: "abcdef0",
   stack: "staging",
-  canonicalHost: "staging.app.windrun.ai",
+  canonicalHost: "app.staging.windrun.ai",
   service: "staging",
   revision: "staging-00001",
 };

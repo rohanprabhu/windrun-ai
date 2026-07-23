@@ -20,7 +20,11 @@ const applicationKinds = new Set<StackKind>([
 ]);
 
 const allowedConfigKeys: Record<StackKind, ReadonlySet<keyof RawStackConfig>> = {
-  foundation: new Set(["stackKind", "allowProjectDeletion"]),
+  foundation: new Set([
+    "stackKind",
+    "allowProjectDeletion",
+    "allowStagingCertificateReplacement",
+  ]),
   delivery: new Set([
     "stackKind",
     "enablePulumiGithubOidc",
@@ -30,7 +34,10 @@ const allowedConfigKeys: Record<StackKind, ReadonlySet<keyof RawStackConfig>> = 
   ]),
   "production-edge": new Set(["stackKind"]),
   production: new Set(["stackKind", "gitCommitSha"]),
-  "staging-edge": new Set(["stackKind"]),
+  "staging-edge": new Set([
+    "stackKind",
+    "allowStagingPreviewNegReplacement",
+  ]),
   staging: new Set(["stackKind", "gitCommitSha"]),
   preview: new Set(["stackKind", "gitCommitSha", "pullRequestNumber"]),
 };

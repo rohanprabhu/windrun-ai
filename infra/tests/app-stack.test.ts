@@ -170,7 +170,7 @@ describe("Cloud Run application stacks", () => {
               { name: "PULUMI_STACK", value: "staging" },
               {
                 name: "NEXT_PUBLIC_CANONICAL_HOST",
-                value: "staging.app.windrun.ai",
+                value: "app.staging.windrun.ai",
               },
             ],
           },
@@ -215,7 +215,7 @@ describe("Cloud Run application stacks", () => {
               { name: "APP_ENVIRONMENT", value: "preview" },
               {
                 name: "NEXT_PUBLIC_CANONICAL_HOST",
-                value: "pr-42.staging.app.windrun.ai",
+                value: "pr-42.app.staging.windrun.ai",
               },
             ]),
           },
@@ -225,7 +225,7 @@ describe("Cloud Run application stacks", () => {
     expect(service.provider).toContain(
       mockUrn("pulumi:providers:gcp", "gcp-staging", "pr-42"),
     );
-    expect(resolved[0]).toBe("https://pr-42.staging.app.windrun.ai");
+    expect(resolved[0]).toBe("https://pr-42.app.staging.windrun.ai");
   });
 
   it("rejects untrusted source and service-name combinations", async () => {

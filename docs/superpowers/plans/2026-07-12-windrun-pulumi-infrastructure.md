@@ -19,8 +19,8 @@
 - Region: `asia-south1`.
 - Parent DNS remains `windrun.ai` in DigitalOcean; delegated Cloud DNS zone is `app.windrun.ai.`.
 - Production hostname: `app.windrun.ai`.
-- Staging hostname: `staging.app.windrun.ai`.
-- Preview hostnames: `pr-<number>.staging.app.windrun.ai`; preview stack names must match `^pr-[1-9][0-9]*$`.
+- Staging hostname: `app.staging.windrun.ai`.
+- Preview hostnames: `pr-<number>.app.staging.windrun.ai`; preview stack names must match `^pr-[1-9][0-9]*$`.
 - No Shared VPC, runtime network sharing, static service-account keys, default GCP provider, per-preview load balancer, per-preview IP, per-preview DNS record, or per-preview certificate.
 - Shell scripts and workflows may invoke Pulumi; they must never mutate cloud resources with `gcloud`, `doctl`, or vendor consoles.
 - Project deletion policy is `PREVENT` unless `allowProjectDeletion=true` during acknowledged full teardown.
@@ -531,11 +531,11 @@ Assert:
 - One public Cloud DNS managed zone with `dnsName:"app.windrun.ai."` in shared.
 - Four `digitalocean.DnsRecord` resources with `domain:"windrun.ai"`, `type:"NS"`, `name:"app"`, TTL 1800, and values from the zone's four assigned name servers.
 - `app.windrun.ai.` A points to production IP.
-- `staging.app.windrun.ai.` and `*.staging.app.windrun.ai.` A point to staging IP.
-- Production/staging DNS authorizations use `PER_PROJECT_RECORD`, `global`, their own providers, and parent domains `app.windrun.ai` and `staging.app.windrun.ai`.
+- `app.staging.windrun.ai.` and `*.app.staging.windrun.ai.` A point to staging IP.
+- Production/staging DNS authorizations use `PER_PROJECT_RECORD`, `global`, their own providers, and parent domains `app.windrun.ai` and `app.staging.windrun.ai`.
 - Validation CNAME name/type/data is copied verbatim into shared DNS.
 - Production certificate covers `app.windrun.ai`.
-- Staging certificate covers both `staging.app.windrun.ai` and `*.staging.app.windrun.ai` using one authorization.
+- Staging certificate covers both `app.staging.windrun.ai` and `*.app.staging.windrun.ai` using one authorization.
 - Production has one certificate-map entry; staging has apex and wildcard entries.
 - Certificates depend on validation records; map entries depend on certificates.
 - Restrictive CAA records lacking `pki.goog` cause a preview-time exception.
@@ -727,7 +727,7 @@ Expected: FAIL because `createAppStack` is missing.
 
 - [ ] **Step 3: Implement immutable image build and Cloud Run**
 
-Call `gcp.organizations.getClientConfigOutput({ provider })`; wrap its access token with `pulumi.secret`; authenticate Docker Build to `${REGION}-docker.pkg.dev` with username `oauth2accesstoken`; use build context `sourceRoot ?? ".."` and Dockerfile `${sourceRoot}/windrun-ai/Dockerfile` or the default `../windrun-ai/Dockerfile`; set `push:true`, `buildOnPreview:false`, and `platforms:[dockerBuild.Platform.Linux_amd64]`; pass `image.ref` to Cloud Run. Set `retainOnDelete:true` on the image because Docker Build delete would otherwise reuse an expired OAuth token; Artifact Registry cleanup policies own eventual tag removal. Require an absolute `sourceRoot` for previews, reject it for static stacks, validate exact fixed/`pr-N` service names, and accept the root only as a local execution input—never Pulumi config, a build arg, runtime metadata, or a stack output. Set `APP_ENVIRONMENT` to `production`, `staging`, or `preview`; `PULUMI_STACK` to the actual Pulumi stack name; and `NEXT_PUBLIC_CANONICAL_HOST` to `app.windrun.ai`, `staging.app.windrun.ai`, or `${serviceName}.staging.app.windrun.ai` respectively. On the `gcp.cloudrunv2.Service`, set ingress to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER`, `invokerIamDisabled:true`, and `deletionProtection:false`; do not create separate Cloud Run IAM resources. A failed build must prevent service registration.
+Call `gcp.organizations.getClientConfigOutput({ provider })`; wrap its access token with `pulumi.secret`; authenticate Docker Build to `${REGION}-docker.pkg.dev` with username `oauth2accesstoken`; use build context `sourceRoot ?? ".."` and Dockerfile `${sourceRoot}/windrun-ai/Dockerfile` or the default `../windrun-ai/Dockerfile`; set `push:true`, `buildOnPreview:false`, and `platforms:[dockerBuild.Platform.Linux_amd64]`; pass `image.ref` to Cloud Run. Set `retainOnDelete:true` on the image because Docker Build delete would otherwise reuse an expired OAuth token; Artifact Registry cleanup policies own eventual tag removal. Require an absolute `sourceRoot` for previews, reject it for static stacks, validate exact fixed/`pr-N` service names, and accept the root only as a local execution input—never Pulumi config, a build arg, runtime metadata, or a stack output. Set `APP_ENVIRONMENT` to `production`, `staging`, or `preview`; `PULUMI_STACK` to the actual Pulumi stack name; and `NEXT_PUBLIC_CANONICAL_HOST` to `app.windrun.ai`, `app.staging.windrun.ai`, or `${serviceName}.app.staging.windrun.ai` respectively. On the `gcp.cloudrunv2.Service`, set ingress to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER`, `invokerIamDisabled:true`, and `deletionProtection:false`; do not create separate Cloud Run IAM resources. A failed build must prevent service registration.
 
 - [ ] **Step 4: Run focused tests and typecheck**
 
@@ -782,9 +782,9 @@ Production assertions:
 Staging assertions:
 
 - Primary NEG uses `cloudRun.service:"staging"`.
-- Preview NEG uses exact `cloudRun.urlMask:"<service>.staging.app.windrun.ai"`.
-- Host `staging.app.windrun.ai` routes to primary backend.
-- Host `*.staging.app.windrun.ai` routes to preview backend.
+- Preview NEG uses exact `cloudRun.urlMask:"<service>.app.staging.windrun.ai"`.
+- Host `app.staging.windrun.ai` routes to primary backend.
+- Host `*.app.staging.windrun.ai` routes to preview backend.
 - No Compute Engine health checks.
 
 - [ ] **Step 2: Run the test to verify it fails**

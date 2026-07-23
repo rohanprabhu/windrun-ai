@@ -38,7 +38,7 @@ jobs:
     with:
       pr-number: ${{ github.event.pull_request.number }}
       merge-sha: ${{ github.event.pull_request.merge_commit_sha }}
-      preview-url: https://pr-${{ github.event.pull_request.number }}.staging.app.windrun.ai
+      preview-url: https://pr-${{ github.event.pull_request.number }}.app.staging.windrun.ai
   destroy-preview:
     if: >-
       github.event.action == 'closed' &&
@@ -55,4 +55,4 @@ jobs:
     with:
       pr-number: ${{ github.event.pull_request.number }}
       base-sha: ${{ github.event.pull_request.base.sha }}
-      preview-url: https://pr-${{ github.event.pull_request.number }}.staging.app.windrun.ai
+      preview-url: https://pr-${{ github.event.pull_request.number }}.app.staging.windrun.ai

@@ -12,15 +12,34 @@ import { SHARED_APIS, WORKLOAD_APIS } from "./services";
 
 export interface FoundationStackArgs {
   allowProjectDeletion: boolean;
+  allowStagingCertificateReplacement: boolean;
   digitalOceanToken: pulumi.Input<string>;
 }
 
-function registerFoundationProtection(allowProjectDeletion: boolean) {
-  pulumi.runtime.registerStackTransformation(({ props, opts }) => ({
+const stagingHostnameMigrationResources = new Set([
+  "preview-a-record",
+  "staging-a-record",
+  "staging-validation-record",
+  "staging-dns-authorization",
+  "staging-certificate",
+  "staging-certificate-entry",
+  "staging-wildcard-certificate-entry",
+]);
+
+function registerFoundationProtection(args: {
+  allowProjectDeletion: boolean;
+  allowStagingCertificateReplacement: boolean;
+}) {
+  pulumi.runtime.registerStackTransformation(({ name, props, opts }) => ({
     props,
     opts: {
       ...opts,
-      protect: !allowProjectDeletion,
+      protect:
+        !args.allowProjectDeletion &&
+        !(
+          args.allowStagingCertificateReplacement &&
+          stagingHostnameMigrationResources.has(name)
+        ),
     },
   }));
 }
@@ -28,7 +47,11 @@ function registerFoundationProtection(allowProjectDeletion: boolean) {
 export function createFoundationStack(
   args: FoundationStackArgs,
 ): FoundationOutputs {
-  registerFoundationProtection(args.allowProjectDeletion);
+  registerFoundationProtection({
+    allowProjectDeletion: args.allowProjectDeletion,
+    allowStagingCertificateReplacement:
+      args.allowStagingCertificateReplacement,
+  });
 
   const bootstrapProvider = createBootstrapProvider();
   const shared = createProjectBundle({
@@ -63,6 +86,8 @@ export function createFoundationStack(
     productionAddress: core.productionAddress,
     stagingAddress: core.stagingAddress,
     digitalOceanProvider,
+    allowStagingCertificateReplacement:
+      args.allowStagingCertificateReplacement,
   });
   const deployment = createGitHubDeploymentIdentities({
     shared,

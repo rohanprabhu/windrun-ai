@@ -9,8 +9,8 @@ Every cloud resource change is performed by Pulumi. Shell scripts and GitHub Act
 ## Success Criteria
 
 - `https://app.windrun.ai` serves the production Cloud Run service through the production load balancer.
-- `https://staging.app.windrun.ai` serves the primary staging Cloud Run service through the staging load balancer.
-- `https://pr-<number>.staging.app.windrun.ai` serves the Cloud Run service owned by Pulumi stack `pr-<number>`.
+- `https://app.staging.windrun.ai` serves the primary staging Cloud Run service through the staging load balancer.
+- `https://pr-<number>.app.staging.windrun.ai` serves the Cloud Run service owned by Pulumi stack `pr-<number>`.
 - Opening or updating a pull request creates or updates its preview stack; closing it destroys the preview stack.
 - Production, staging/previews, and shared DNS/control resources live in three different Google Cloud projects.
 - The staging load balancer routes new preview services through a serverless NEG URL mask and is not updated by preview-stack deployments.
@@ -29,8 +29,8 @@ Every cloud resource change is performed by Pulumi. Shell scripts and GitHub Act
 | Infrastructure language | Pulumi TypeScript |
 | State backend | Clean Pulumi Cloud individual account created for Windrun and claimed by `rohan@windrun.ai` after the initial work |
 | Production domain | `app.windrun.ai` |
-| Staging domain | `staging.app.windrun.ai` |
-| Preview domain | `<service>.staging.app.windrun.ai`, where pull requests use service name `pr-<number>` |
+| Staging domain | `app.staging.windrun.ai` |
+| Preview domain | `<service>.app.staging.windrun.ai`, where pull requests use service name `pr-<number>` |
 | Parent DNS | DigitalOcean remains authoritative for `windrun.ai` |
 | Delegated DNS | DigitalOcean delegates `app.windrun.ai` to a Cloud DNS public zone |
 | TLS | Google Certificate Manager DNS-authorized managed certificates and certificate maps |
@@ -80,12 +80,12 @@ The initial GCP deployment order is `foundation`, `production`, `production-edge
 
 ### Staging and previews
 
-1. Both `staging.app.windrun.ai` and `*.staging.app.windrun.ai` resolve to the global IP reserved in the staging project.
+1. Both `app.staging.windrun.ai` and `*.app.staging.windrun.ai` resolve to the global IP reserved in the staging project.
 2. The staging certificate covers the staging apex and its first-level wildcard on an `EXTERNAL_MANAGED`, Premium-tier frontend.
-3. Host `staging.app.windrun.ai` routes to an explicit serverless NEG for Cloud Run service `staging`.
-4. Host pattern `*.staging.app.windrun.ai` routes to a second backend whose serverless NEG has URL mask `<service>.staging.app.windrun.ai`.
+3. Host `app.staging.windrun.ai` routes to an explicit serverless NEG for Cloud Run service `staging`.
+4. Host pattern `*.app.staging.windrun.ai` routes to a second backend whose serverless NEG has URL mask `<service>.app.staging.windrun.ai`.
 5. The URL mask extracts the hostname label and routes it to the same-named Cloud Run service in `windrun-ai-staging-20260712` and `asia-south1`.
-6. Creating service `pr-42` makes `pr-42.staging.app.windrun.ai` routable without changing DNS, the URL map, the backend service, or the NEG. Destroying that service removes the environment without an edge update.
+6. Creating service `pr-42` makes `pr-42.app.staging.windrun.ai` routable without changing DNS, the URL map, the backend service, or the NEG. Destroying that service removes the environment without an edge update.
 
 The preview-mask backend intentionally exposes only same-project Cloud Run services that disable the Cloud Run invoker IAM check. This is the current recommended public-access mode and works with domain-restricted sharing. Any internal Cloud Run service must retain the invoker check, in which case the public load balancer cannot expose it successfully even if a matching hostname is requested. In both cases, the Cloud Run ingress setting still rejects traffic that does not arrive through an allowed internal or Cloud Load Balancing path.
 
@@ -96,10 +96,10 @@ The foundation stack creates a Cloud DNS public zone for `app.windrun.ai` in the
 The foundation stack reserves the production and staging global IPv4 addresses in their respective projects, then creates these Cloud DNS records:
 
 - `app.windrun.ai A <production-global-ip>`
-- `staging.app.windrun.ai A <staging-global-ip>`
-- `*.staging.app.windrun.ai A <staging-global-ip>`
+- `app.staging.windrun.ai A <staging-global-ip>`
+- `*.app.staging.windrun.ai A <staging-global-ip>`
 
-Certificate Manager DNS authorization is created in each environment project with `type: "PER_PROJECT_RECORD"`. The returned CNAME validation records are written verbatim into the shared Cloud DNS zone by the foundation stack and retained for automatic renewal. The production certificate covers `app.windrun.ai`. One staging DNS authorization covers both `staging.app.windrun.ai` and `*.staging.app.windrun.ai`. The foundation preview checks inherited CAA records and requires Google Trust Services (`pki.goog`) to be permitted. Certificate maps remain in their corresponding environment projects and are referenced by the edge stacks.
+Certificate Manager DNS authorization is created in each environment project with `type: "PER_PROJECT_RECORD"`. The returned CNAME validation records are written verbatim into the shared Cloud DNS zone by the foundation stack and retained for automatic renewal. The production certificate covers `app.windrun.ai`. One staging DNS authorization covers both `app.staging.windrun.ai` and `*.app.staging.windrun.ai`. The foundation preview checks inherited CAA records and requires Google Trust Services (`pki.goog`) to be permitted. Certificate maps remain in their corresponding environment projects and are referenced by the edge stacks.
 
 ## Application Experience
 
