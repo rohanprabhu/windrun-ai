@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readDeploymentStatus } from "@/lib/deployment";
+import { normalizeRequestHost, readDeploymentStatus } from "@/lib/deployment";
 
 describe("readDeploymentStatus", () => {
   it("normalizes Cloud Run metadata without leaking unrelated variables", () => {
@@ -45,5 +45,24 @@ describe("readDeploymentStatus", () => {
     expect(readDeploymentStatus({ APP_ENVIRONMENT: "development" }).environment).toBe(
       "local",
     );
+  });
+
+  it("prefers the request host over the injected IaC fallback", () => {
+    const status = readDeploymentStatus(
+      {
+        NEXT_PUBLIC_CANONICAL_HOST: "stale.staging.app.windrun.ai",
+      },
+      "app.staging.windrun.ai",
+    );
+
+    expect(status.canonicalHost).toBe("app.staging.windrun.ai");
+  });
+
+  it("normalizes forwarded hosts and rejects malformed request hosts", () => {
+    expect(
+      normalizeRequestHost("PR-42.APP.STAGING.WINDRUN.AI, proxy.internal"),
+    ).toBe("pr-42.app.staging.windrun.ai");
+    expect(normalizeRequestHost("app.staging.windrun.ai/path")).toBeUndefined();
+    expect(normalizeRequestHost("app.staging.windrun.ai\r\nx-bad: yep")).toBeUndefined();
   });
 });

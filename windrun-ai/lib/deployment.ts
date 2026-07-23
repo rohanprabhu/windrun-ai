@@ -18,12 +18,33 @@ const allowedEnvironments = new Set<AppEnvironment>([
   "local",
 ]);
 
+export function normalizeRequestHost(requestHost?: string | null) {
+  const firstForwardedHost = requestHost?.split(",")[0]?.trim();
+
+  if (
+    !firstForwardedHost ||
+    firstForwardedHost.includes("/") ||
+    firstForwardedHost.includes("\\") ||
+    /[\r\n]/.test(firstForwardedHost)
+  ) {
+    return undefined;
+  }
+
+  return firstForwardedHost.toLowerCase();
+}
+
 export function readDeploymentStatus(
   env: Readonly<Partial<NodeJS.ProcessEnv>> = process.env,
+  requestHost?: string | null,
 ): DeploymentStatus {
   const candidate = env.APP_ENVIRONMENT as AppEnvironment | undefined;
   const environment =
     candidate && allowedEnvironments.has(candidate) ? candidate : "local";
+  const canonicalHost =
+    normalizeRequestHost(requestHost) ||
+    // Bracket access keeps this server-read runtime value out of client bundles.
+    env["NEXT_PUBLIC_CANONICAL_HOST"] ||
+    "localhost:3000";
 
   return {
     environment,
@@ -31,8 +52,7 @@ export function readDeploymentStatus(
     region: env.GOOGLE_CLOUD_REGION || "local",
     commitSha: env.GIT_COMMIT_SHA?.slice(0, 7) || "local",
     stack: env.PULUMI_STACK || "local",
-    // Bracket access keeps this server-read runtime value out of client bundles.
-    canonicalHost: env["NEXT_PUBLIC_CANONICAL_HOST"] || "localhost:3000",
+    canonicalHost,
     service: env.K_SERVICE || "windrun-local",
     revision: env.K_REVISION || "local",
   };
