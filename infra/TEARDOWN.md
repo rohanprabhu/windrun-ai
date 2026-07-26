@@ -1,6 +1,6 @@
 # Windrun infrastructure teardown contract
 
-This document defines dependency and safety invariants, not an executable destroy procedure. `docs/superpowers/plans/2026-07-12-windrun-ci-operations.md` owns `.github/workflows` and executable preview, deploy, destroy, and smoke-test scripts. These infrastructure documents do not create or own those files and authorize no `gh`, mutating `gcloud`, or `doctl` command. Use the operations-track implementation for refusal gates, dry runs, confirmations, and exact read-only identity checks.
+This document defines dependency and safety invariants, not an executable destroy procedure. `docs/superpowers/plans/2026-07-12-windrun-ci-operations.md` owns `.github/workflows` and executable preview, deploy, destroy, and smoke-test scripts. These infrastructure documents do not create or own those files and authorize no `gh` or mutating `gcloud` command. Use the operations-track implementation for refusal gates, dry runs, confirmations, and exact read-only identity checks.
 
 ## Non-negotiable cross-stack order
 
@@ -9,7 +9,7 @@ This document defines dependency and safety invariants, not an executable destro
 ```text
 all preview/application/edge stacks empty
 -> delivery destroyed
--> exact active gcloud + ADC identity verified as rohan@windrun.ai
+-> explicit rohan@windrun.ai Google token and stack project injected into Pulumi
 -> windrun-ai:allowProjectDeletion=true previewed and applied locally
 -> foundation state verified unprotected with deletionPolicy: DELETE
 -> foundation destroyed locally as rohan@windrun.ai
@@ -23,7 +23,7 @@ Normal foundation state has protection enabled and project `deletionPolicy: PREV
 
 If the transition applies but a later operation fails while foundation resources survive, the operations path must restore `windrun-ai:allowProjectDeletion=false`, apply foundation locally, and verify protection plus `deletionPolicy: PREVENT` before exiting.
 
-Within foundation, dependency reversal must preserve these rules: DigitalOcean delegation is deleted before Cloud DNS, validation CNAMEs are deleted after certificates, and projects are scheduled last.
+Within foundation, dependency reversal must preserve these rules: Cloud DNS record sets are deleted before the apex zone, validation CNAMEs are deleted after certificates, and projects are scheduled last.
 
 ## Project deletion semantics
 
@@ -31,7 +31,7 @@ Successful foundation destruction schedules all three projects for deletion. The
 
 ## Delivery checkpoint and teardown credentials
 
-The original bootstrap is two-phase. Explicit `rohan@windrun.ai` token auth and the encrypted DigitalOcean secret bootstrap permit the initial GCP order:
+The original bootstrap is two-phase. Explicit `rohan@windrun.ai` token auth permits the initial GCP order:
 
 ```text
 foundation -> production -> production-edge -> staging -> staging-edge
@@ -73,7 +73,7 @@ GCP_SERVICE_ACCOUNT_FOUNDATION
 
 ## Reference contract for teardown review
 
-The only seven Windrun config keys are:
+The only six Windrun config keys are:
 
 ```text
 windrun-ai:stackKind
@@ -82,7 +82,6 @@ windrun-ai:pullRequestNumber
 windrun-ai:allowProjectDeletion
 windrun-ai:enablePulumiGithubOidc
 windrun-ai:pulumiOrganization
-windrun-ai:digitalOceanToken
 ```
 
 The only seven stack kinds are `foundation`, `delivery`, `production-edge`, `production`, `staging-edge`, `staging`, and `preview`. The six static GCP/delivery stack files are committed; `preview` uses a dynamic `pr-<number>` name and config.
@@ -99,6 +98,7 @@ stagingRuntimeServiceAccountEmail
 productionRuntimeServiceAccountEmail
 stagingGlobalIp
 productionGlobalIp
+apexNameServers
 stagingCertificateMapId
 productionCertificateMapId
 stagingCertificateStatus
@@ -121,4 +121,4 @@ The six identity pairs are `foundationWifProvider`/`foundationDeployServiceAccou
 
 ## Review evidence
 
-Before authorizing the destructive foundation step, the operator must retain reviewable evidence that every earlier stack is empty, delivery is gone, both Google identities are exact, the protection/deletion-policy preview was accepted, and persisted foundation state matches the preview. Infrastructure verification remains `pnpm -C infra check` plus `shellcheck infra/scripts/bootstrap-foundation-secret.sh`; executable lifecycle behavior remains in the CI/operations track.
+Before authorizing the destructive foundation step, the operator must retain reviewable evidence that every earlier stack is empty, delivery is gone, both Google identities are exact, the protection/deletion-policy preview was accepted, and persisted foundation state matches the preview. Infrastructure verification remains `pnpm -C infra check`; executable lifecycle behavior remains in the CI/operations track.

@@ -12,9 +12,7 @@ export const HOSTNAMES = {
   production: "app.windrun.ai",
   staging: "app.staging.windrun.ai",
   previewSuffix: "app.staging.windrun.ai",
-  productionZone: "app.windrun.ai.",
-  stagingZone: "staging.windrun.ai.",
-  parentZone: "windrun.ai",
+  apexZone: "windrun.ai.",
 } as const;
 
 export const SERVICE_NAMES = {

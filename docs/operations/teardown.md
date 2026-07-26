@@ -2,7 +2,7 @@
 
 [Operations index](README.md) · [Bootstrap](bootstrap.md)
 
-Use these operations only from a trusted local checkout. The scripts use Pulumi as the sole mutation boundary: they run no mutating `gcloud`, `doctl`, or `gh` subcommands.
+Use these operations only from a trusted local checkout. The scripts use Pulumi as the sole mutation boundary: they run no mutating `gcloud` or `gh` subcommands.
 
 ## Environment-only teardown
 

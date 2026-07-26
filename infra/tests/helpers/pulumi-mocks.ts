@@ -34,11 +34,6 @@ export const capturedCalls: Array<{
 
 let activeStack = "test";
 let activeStackReferenceOutputs: Record<string, unknown> = {};
-let activeDigitalOceanRecords: Array<{
-  type: string;
-  value: string;
-  tag?: string;
-}> = [];
 const pendingDependencies = new Map<string, string[]>();
 const pendingProtect = new Map<string, boolean>();
 const pendingRetainOnDelete = new Map<string, boolean>();
@@ -177,8 +172,6 @@ function callResult(args: MockCallArgs) {
         project: "mock-project",
         region: "asia-south1",
       };
-    case "digitalocean:index/getRecords:getRecords":
-      return { records: activeDigitalOceanRecords };
     default:
       return args.inputs;
   }
@@ -189,16 +182,10 @@ export async function setWindrunMocks(
   options: {
     organization?: string;
     stackReferenceOutputs?: Record<string, unknown>;
-    digitalOceanRecords?: Array<{
-      type: string;
-      value: string;
-      tag?: string;
-    }>;
   } = {},
 ) {
   activeStack = stack;
   activeStackReferenceOutputs = options.stackReferenceOutputs ?? {};
-  activeDigitalOceanRecords = options.digitalOceanRecords ?? [];
   capturedResources.length = 0;
   capturedCalls.length = 0;
   pendingDependencies.clear();

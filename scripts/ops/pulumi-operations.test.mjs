@@ -2172,7 +2172,7 @@ test('full teardown documentation records every destructive and recovery boundar
     '30-day recovery window',
     'permanently unavailable',
     'gcloud auth print-access-token --account=rohan@windrun.ai',
-    'no mutating `gcloud`, `doctl`, or `gh`',
+    'no mutating `gcloud` or `gh`',
     'updateInProgress',
     '`foundation` stack is absent',
   ]) {

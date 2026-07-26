@@ -40,7 +40,7 @@ pnpm ci:quality
 pnpm test:ci
 pnpm ci:validate-contract
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-rg -n -g '!*.test.mjs' 'pull_request_target|cancel-in-progress: true|gcloud .*create|gcloud .*delete|doctl|gh api|gh variable set' .github scripts
+rg -n -g '!*.test.mjs' 'pull_request_target|cancel-in-progress: true|gcloud .*create|gcloud .*delete|gh api|gh variable set' .github scripts
 ```
 
 Acceptance requires every test and build to pass, actionlint to be silent, and the final executable-source search to exit 1 with no output. That search targets unsafe workflow triggers, canceling mutation queues, vendor-CLI mutations, and direct GitHub API/variable mutation. It deliberately does not prohibit the two local `gh auth` reads or the exact `gcloud auth` identity reads documented in the [teardown runbook](teardown.md). The `*.test.mjs` exclusion is intentional because negative assertions and prohibition prose contain the forbidden text while testing its absence from executable workflows and operation sources.

@@ -1,8 +1,8 @@
 # Windrun infrastructure contract
 
-This directory is the Pulumi TypeScript implementation for the Windrun Cloud Run platform. It owns the cloud-resource graph, typed stack dispatch, static stack configuration, encrypted DigitalOcean secret bootstrap, and the local-only delivery plane. It does not own executable CI or lifecycle orchestration.
+This directory is the Pulumi TypeScript implementation for the Windrun Cloud Run platform. It owns the cloud-resource graph, typed stack dispatch, static stack configuration, the authoritative Cloud DNS zone for `windrun.ai.`, and the local-only delivery plane. It does not own executable CI or lifecycle orchestration.
 
-`docs/superpowers/plans/2026-07-12-windrun-ci-operations.md` owns `.github/workflows` and executable preview, deploy, destroy, and smoke-test scripts. These infrastructure documents do not create or own those files and authorize no `gh`, mutating `gcloud`, or `doctl` command. Cloud and delivery-plane mutations must go through Pulumi; the operations track supplies the guarded commands and exact read-only identity checks.
+`docs/superpowers/plans/2026-07-12-windrun-ci-operations.md` owns `.github/workflows` and executable preview, deploy, destroy, and smoke-test scripts. These infrastructure documents do not create or own those files and authorize no `gh` or mutating `gcloud` command. Cloud and delivery-plane mutations must go through Pulumi; the operations track supplies the guarded commands and exact read-only identity checks.
 
 ## Stack and configuration contract
 
@@ -16,7 +16,6 @@ The only Windrun project config keys are:
 | `windrun-ai:allowProjectDeletion` | `foundation`; false during normal operation and true only during acknowledged full teardown. |
 | `windrun-ai:enablePulumiGithubOidc` | `delivery`; false before account claim and true at the post-claim checkpoint. |
 | `windrun-ai:pulumiOrganization` | `delivery`; set to the canonical Pulumi login returned by `pulumi whoami` after claim. |
-| `windrun-ai:digitalOceanToken` | `foundation`; an encrypted secret read separately from the typed non-secret config. |
 
 The seven stack kinds are:
 
@@ -46,6 +45,7 @@ stagingRuntimeServiceAccountEmail
 productionRuntimeServiceAccountEmail
 stagingGlobalIp
 productionGlobalIp
+apexNameServers
 stagingCertificateMapId
 productionCertificateMapId
 stagingCertificateStatus
@@ -72,9 +72,7 @@ Missing, empty, or renamed outputs are contract violations. The last 12 values a
 
 The first foundation update is local-only. The operations wrapper requests a short-lived token with `gcloud auth print-access-token --account=rohan@windrun.ai`, verifies that token resolves to exactly `rohan@windrun.ai`, and passes `GOOGLE_OAUTH_ACCESS_TOKEN` plus a stack-derived `GOOGLE_CLOUD_PROJECT` only to the Pulumi child process. The active/default gcloud account, default project, and Application Default Credentials are not trusted. `rohan@windrun.ai` must have the required organization project-lifecycle and billing permissions. The bootstrap GCP provider intentionally has no project; per-project providers are created only after the project outputs exist.
 
-Before the first update, `infra/scripts/bootstrap-foundation-secret.sh` transfers the DigitalOcean token from macOS Keychain to encrypted `windrun-ai:digitalOceanToken` config. It verifies that the serialized stack value is encrypted before deleting the Keychain item, and it never prints the token.
-
-Explicit `rohan@windrun.ai` token auth plus the encrypted DigitalOcean secret allow this pre-claim order:
+Explicit `rohan@windrun.ai` token auth allows this pre-claim order:
 
 ```text
 foundation -> production -> production-edge -> staging -> staging-edge
@@ -152,7 +150,7 @@ all preview/application/edge stacks empty
 -> foundation destroyed locally as rohan@windrun.ai
 ```
 
-Within the foundation destroy graph, DigitalOcean delegation is deleted before Cloud DNS, validation CNAMEs are deleted after certificates, and projects are scheduled last. The delivery stack must be gone before the foundation transition because it consumes foundation outputs and owns the CI gate.
+Within the foundation destroy graph, Cloud DNS record sets are deleted before the apex zone, validation CNAMEs are deleted after certificates, and projects are scheduled last. The delivery stack must be gone before the foundation transition because it consumes foundation outputs and owns the CI gate.
 
 See `infra/TEARDOWN.md` for the invariant in operational-review form. The executable teardown, refusal gates, identity checks, and recovery path belong to `docs/superpowers/plans/2026-07-12-windrun-ci-operations.md`.
 
@@ -160,4 +158,4 @@ After successful foundation destruction, all three GCP projects enter `DELETE_RE
 
 ## Local verification
 
-From the repository root, the infrastructure track is verified with `pnpm -C infra check` and `shellcheck infra/scripts/bootstrap-foundation-secret.sh`.
+From the repository root, the infrastructure track is verified with `pnpm -C infra check`.

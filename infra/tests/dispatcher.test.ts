@@ -15,7 +15,6 @@ import {
 const organization = "mock-org";
 const commitSha = "b".repeat(40);
 const repositoryRoot = path.resolve(__dirname, "..", "..");
-const digitalOceanToken = "dispatcher-test-do-token";
 const githubToken = "dispatcher-test-github-token";
 const pulumiAccessToken = "dispatcher-test-pulumi-token";
 
@@ -47,6 +46,12 @@ const foundationOutputFixture = {
     `production-runtime@${PROJECT_IDS.production}.iam.gserviceaccount.com`,
   stagingGlobalIp: "203.0.113.20",
   productionGlobalIp: "203.0.113.10",
+  apexNameServers: [
+    "ns-cloud-a1.googledomains.com.",
+    "ns-cloud-a2.googledomains.com.",
+    "ns-cloud-a3.googledomains.com.",
+    "ns-cloud-a4.googledomains.com.",
+  ],
   stagingCertificateMapId:
     `projects/${PROJECT_IDS.staging}/locations/global/certificateMaps/windrun-staging`,
   productionCertificateMapId:
@@ -111,12 +116,7 @@ async function runProgram(args: {
     stackReferenceOutputs:
       args.foundationOutputs ?? foundationOutputFixture,
   });
-  pulumi.runtime.setAllConfig(
-    args.config,
-    args.config["windrun-ai:digitalOceanToken"] === undefined
-      ? []
-      : ["windrun-ai:digitalOceanToken"],
-  );
+  pulumi.runtime.setAllConfig(args.config, []);
   vi.resetModules();
 
   const previousSourceRoot = process.env.WINDRUN_APP_SOURCE;
@@ -244,7 +244,6 @@ describe("Pulumi stack dispatcher", () => {
     async (_label, allowProjectDeletion, expectedProtect, deletionPolicy) => {
       const config: Record<string, string> = {
         "windrun-ai:stackKind": "foundation",
-        "windrun-ai:digitalOceanToken": digitalOceanToken,
       };
       if (allowProjectDeletion !== undefined) {
         config["windrun-ai:allowProjectDeletion"] = String(
@@ -274,7 +273,6 @@ describe("Pulumi stack dispatcher", () => {
       expect(
         resourcesOfType("pulumi:pulumi:StackReference"),
       ).toEqual([]);
-      expect(JSON.stringify(resolved)).not.toContain(digitalOceanToken);
       assertFoundationResourceBoundary();
     },
   );
@@ -285,7 +283,6 @@ describe("Pulumi stack dispatcher", () => {
       config: {
         "windrun-ai:stackKind": "foundation",
         "windrun-ai:allowProjectDeletion": "false",
-        "windrun-ai:digitalOceanToken": digitalOceanToken,
       },
     });
 
@@ -359,9 +356,7 @@ describe("Pulumi stack dispatcher", () => {
     );
     expect(
       capturedResources.filter(
-        (resource) =>
-          resource.type.startsWith("gcp:") ||
-          resource.type.startsWith("digitalocean:"),
+        (resource) => resource.type.startsWith("gcp:"),
       ),
     ).toEqual([]);
   });
@@ -667,7 +662,6 @@ function assertFoundationResourceBoundary() {
   const allowedTypes = new Set([
     "pulumi:pulumi:Stack",
     "pulumi:providers:gcp",
-    "pulumi:providers:digitalocean",
     "gcp:organizations/project:Project",
     "gcp:projects/service:Service",
     "gcp:artifactregistry/repository:Repository",
@@ -675,7 +669,6 @@ function assertFoundationResourceBoundary() {
     "gcp:serviceaccount/account:Account",
     "gcp:dns/managedZone:ManagedZone",
     "gcp:dns/recordSet:RecordSet",
-    "digitalocean:index/dnsRecord:DnsRecord",
     "gcp:certificatemanager/dnsAuthorization:DnsAuthorization",
     "gcp:certificatemanager/certificate:Certificate",
     "gcp:certificatemanager/certificateMap:CertificateMap",
@@ -692,9 +685,7 @@ function assertFoundationResourceBoundary() {
   expect(
     capturedResources.filter(
       (resource) =>
-        (resource.type.startsWith("gcp:") ||
-          resource.type.startsWith("digitalocean:")) &&
-        !resource.provider,
+        resource.type.startsWith("gcp:") && !resource.provider,
     ),
   ).toEqual([]);
 }

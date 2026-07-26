@@ -31,10 +31,8 @@ function createFixture({
   const root = mkdtempSync(join(tmpdir(), 'windrun-ci-contract-'))
   const infraRoot = join(root, 'infra')
   const deliveryRoot = join(infraRoot, 'src', 'delivery')
-  const opsRoot = join(root, 'scripts', 'ops')
 
   mkdirSync(deliveryRoot, { recursive: true })
-  mkdirSync(opsRoot, { recursive: true })
   writeJson(join(root, 'package.json'), {
     packageManager: 'pnpm@11.7.0',
     scripts: REQUIRED_SCRIPTS,
@@ -56,7 +54,6 @@ function createFixture({
   for (const file of ['index.ts', 'github.ts', 'pulumi-oidc.ts']) {
     writeFileSync(join(deliveryRoot, file), '')
   }
-  writeFileSync(join(opsRoot, 'bootstrap-foundation-secret.sh'), '')
 
   return root
 }
@@ -148,19 +145,6 @@ test('reports missing delivery source files', () => {
     rmSync(join(root, 'infra', 'src', 'delivery', 'github.ts'))
     assert.deepEqual(validateContract(root), [
       'infra/src/delivery/github.ts must exist',
-    ])
-  } finally {
-    removeFixture(root)
-  }
-})
-
-test('reports a missing foundation secret handoff script', () => {
-  const root = createFixture()
-
-  try {
-    rmSync(join(root, 'scripts', 'ops', 'bootstrap-foundation-secret.sh'))
-    assert.deepEqual(validateContract(root), [
-      'scripts/ops/bootstrap-foundation-secret.sh must exist',
     ])
   } finally {
     removeFixture(root)

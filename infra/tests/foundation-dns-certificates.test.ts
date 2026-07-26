@@ -1,18 +1,14 @@
-import * as pulumi from "@pulumi/pulumi";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { HOSTNAMES, PROJECT_IDS } from "../src/constants";
 import { createDnsCertificateResources, validateInheritedCaa } from "../src/foundation/certificates";
 import { createFoundationCoreResources } from "../src/foundation/core";
-import { createDigitalOceanProvider } from "../src/foundation/dns";
 import { createProjectBundle, type ProjectBundle } from "../src/foundation/projects";
 import { SHARED_APIS, WORKLOAD_APIS } from "../src/foundation/services";
 import { createBootstrapProvider } from "../src/providers";
 import {
-  MOCK_NAME_SERVERS,
   MOCK_PRODUCTION_IP,
   MOCK_STAGING_IP,
-  capturedCalls,
   gcpResourcesWithoutExplicitProvider,
   mockUrn,
   resolveOutput,
@@ -58,30 +54,25 @@ async function createFixture() {
   await settleBundles([shared, staging, production]);
 
   const core = createFoundationCoreResources({ staging, production });
-  const digitalOceanProvider = createDigitalOceanProvider(
-    pulumi.secret("mock-digitalocean-token"),
-  );
   const dnsCertificates = createDnsCertificateResources({
     shared,
     staging,
     production,
     productionAddress: core.productionAddress,
     stagingAddress: core.stagingAddress,
-    digitalOceanProvider,
     allowStagingCertificateReplacement: false,
   });
 
   await Promise.all([
-    resolveOutput(dnsCertificates.productionZone.urn),
-    resolveOutput(dnsCertificates.stagingZone.urn),
-    ...dnsCertificates.delegationRecords.map((record) =>
-      resolveOutput(record.urn),
-    ),
+    resolveOutput(dnsCertificates.apexZone.urn),
+    resolveOutput(dnsCertificates.apexNameServers),
     resolveOutput(dnsCertificates.productionAddressRecord.urn),
     resolveOutput(dnsCertificates.stagingAddressRecord.urn),
     resolveOutput(dnsCertificates.previewAddressRecord.urn),
-    resolveOutput(dnsCertificates.productionCertificateAuthorityRecord.urn),
-    resolveOutput(dnsCertificates.stagingCertificateAuthorityRecord.urn),
+    resolveOutput(dnsCertificates.certificateAuthorityRecord.urn),
+    ...dnsCertificates.businessRecords.map((record) =>
+      resolveOutput(record.urn),
+    ),
     resolveOutput(dnsCertificates.productionAuthorization.urn),
     resolveOutput(dnsCertificates.stagingAuthorization.urn),
     resolveOutput(dnsCertificates.productionValidationRecord.urn),
@@ -104,94 +95,57 @@ beforeEach(async () => {
 });
 
 describe("shared DNS and certificate lifecycle", () => {
-  it("delegates production and staging zones and routes their app hosts", async () => {
+  it("creates one authoritative apex zone and routes application hosts", async () => {
     await createFixture();
 
     const zones = resourcesOfType("gcp:dns/managedZone:ManagedZone");
-    expect(zones).toHaveLength(2);
-    expect(zones.map((resource) => resource.inputs)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          project: PROJECT_IDS.shared,
-          name: "windrun-app",
-          dnsName: "app.windrun.ai.",
-          visibility: "public",
-          forceDestroy: true,
-        }),
-        expect.objectContaining({
-          project: PROJECT_IDS.shared,
-          name: "windrun-staging",
-          dnsName: "staging.windrun.ai.",
-          visibility: "public",
-          forceDestroy: true,
-        }),
-      ]),
-    );
-
-    const delegation = resourcesOfType(
-      "digitalocean:index/dnsRecord:DnsRecord",
-    );
-    expect(delegation).toHaveLength(8);
-    for (const delegatedName of ["app", "staging"]) {
-      const records = delegation.filter(
-        (record) => record.inputs.name === delegatedName,
-      );
-      expect(records).toHaveLength(4);
-      expect(records.map((resource) => resource.inputs.value)).toEqual([
-        ...MOCK_NAME_SERVERS,
-      ]);
-      for (const record of records) {
-        expect(record.inputs).toMatchObject({
-          domain: "windrun.ai",
-          type: "NS",
-          name: delegatedName,
-          ttl: 1800,
-        });
-      }
-    }
+    expect(zones).toHaveLength(1);
+    expect(zones[0].inputs).toMatchObject({
+      project: PROJECT_IDS.shared,
+      name: "windrun-apex",
+      dnsName: "windrun.ai.",
+      visibility: "public",
+      forceDestroy: true,
+    });
+    expect(resourcesOfType("digitalocean:index/dnsRecord:DnsRecord")).toEqual([]);
 
     const recordSets = resourcesOfType("gcp:dns/recordSet:RecordSet");
-    expect(
-      recordSets.find((resource) => resource.name === "production-a-record")
-        ?.inputs,
-    ).toMatchObject({
+    for (const record of recordSets) {
+      expect(record.inputs.managedZone).toBe("windrun-apex");
+    }
+    expect(recordSets.find((resource) => resource.name === "production-a-record")?.inputs).toMatchObject({
       name: "app.windrun.ai.",
       type: "A",
       rrdatas: [MOCK_PRODUCTION_IP],
     });
-    expect(
-      recordSets.find((resource) => resource.name === "staging-a-record")
-        ?.inputs,
-    ).toMatchObject({
+    expect(recordSets.find((resource) => resource.name === "staging-a-record")?.inputs).toMatchObject({
       name: "app.staging.windrun.ai.",
       type: "A",
       rrdatas: [MOCK_STAGING_IP],
     });
-    expect(
-      recordSets.find((resource) => resource.name === "preview-a-record")
-        ?.inputs,
-    ).toMatchObject({
+    expect(recordSets.find((resource) => resource.name === "preview-a-record")?.inputs).toMatchObject({
       name: "*.app.staging.windrun.ai.",
       type: "A",
       rrdatas: [MOCK_STAGING_IP],
     });
-    expect(
-      recordSets.find(
-        (resource) => resource.name === "certificate-authority-record",
-      )?.inputs,
-    ).toMatchObject({
-      name: "app.windrun.ai.",
+    expect(recordSets.find((resource) => resource.name === "certificate-authority-record")?.inputs).toMatchObject({
+      name: "windrun.ai.",
       type: "CAA",
       rrdatas: ['0 issue "pki.goog"', '0 issuewild "pki.goog"'],
     });
-    expect(
-      recordSets.find(
-        (resource) => resource.name === "staging-certificate-authority-record",
-      )?.inputs,
-    ).toMatchObject({
-      name: "staging.windrun.ai.",
-      type: "CAA",
-      rrdatas: ['0 issue "pki.goog"', '0 issuewild "pki.goog"'],
+    expect(recordSets.find((resource) => resource.name === "business-mx-record")?.inputs).toMatchObject({
+      name: "windrun.ai.",
+      type: "MX",
+      ttl: 300,
+      rrdatas: ["1 smtp.google.com."],
+    });
+    expect(recordSets.find((resource) => resource.name === "business-google-site-verification-record")?.inputs).toMatchObject({
+      name: "windrun.ai.",
+      type: "TXT",
+      ttl: 300,
+      rrdatas: [
+        '"google-site-verification=RNjfWKrI2EKntfBF5bUNllfn_wLNKSYAvSN_UCuYOng"',
+      ],
     });
   });
 
@@ -283,32 +237,10 @@ describe("shared DNS and certificate lifecycle", () => {
           "foundation-dns-test",
         ),
       );
-      for (let index = 1; index <= 4; index += 1) {
-        expect(certificate?.dependencies).toContain(
-          mockUrn(
-            "digitalocean:index/dnsRecord:DnsRecord",
-            `app-ns-${index}`,
-            "foundation-dns-test",
-          ),
-        );
-      }
-      if (logicalName === "staging") {
-        for (let index = 1; index <= 4; index += 1) {
-          expect(certificate?.dependencies).toContain(
-            mockUrn(
-              "digitalocean:index/dnsRecord:DnsRecord",
-              `staging-ns-${index}`,
-              "foundation-dns-test",
-            ),
-          );
-        }
-      }
       expect(certificate?.dependencies).toContain(
         mockUrn(
           "gcp:dns/recordSet:RecordSet",
-          logicalName === "production"
-            ? "certificate-authority-record"
-            : "staging-certificate-authority-record",
+          "certificate-authority-record",
           "foundation-dns-test",
         ),
       );
@@ -355,29 +287,6 @@ describe("shared DNS and certificate lifecycle", () => {
 
     expect(resourcesOfType("gcp:certificatemanager/certificateMap:CertificateMap")).toHaveLength(2);
     expect(gcpResourcesWithoutExplicitProvider()).toEqual([]);
-  });
-
-  it("queries only inherited apex CAA records through the explicit provider", async () => {
-    await createFixture();
-
-    const caaCalls = capturedCalls.filter(
-      (call) => call.token === "digitalocean:index/getRecords:getRecords",
-    );
-    expect(caaCalls).toHaveLength(1);
-    expect(caaCalls[0].inputs).toMatchObject({
-      domain: "windrun.ai",
-      filters: [
-        { key: "type", values: ["CAA"] },
-        { key: "name", values: ["@"] },
-      ],
-    });
-    expect(caaCalls[0].provider).toContain(
-      mockUrn(
-        "pulumi:providers:digitalocean",
-        "digitalocean-windrun",
-        "foundation-dns-test",
-      ),
-    );
   });
 });
 

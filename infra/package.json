@@ -8,7 +8,6 @@
     "check": "vitest run && tsc --noEmit"
   },
   "dependencies": {
-    "@pulumi/digitalocean": "4.75.0",
     "@pulumi/docker-build": "0.0.20",
     "@pulumi/gcp": "9.29.0",
     "@pulumi/github": "6.14.0",

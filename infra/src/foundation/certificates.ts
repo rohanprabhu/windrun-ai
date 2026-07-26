@@ -1,4 +1,3 @@
-import * as digitalocean from "@pulumi/digitalocean";
 import * as gcp from "@pulumi/gcp";
 
 import { HOSTNAMES } from "../constants";
@@ -139,8 +138,6 @@ function createManagedCertificate(args: {
   authorization: gcp.certificatemanager.DnsAuthorization;
   validationRecord: gcp.dns.RecordSet;
   certificateAuthorityRecord: gcp.dns.RecordSet;
-  delegationRecords: digitalocean.DnsRecord[];
-  caaValidated: import("@pulumi/pulumi").Output<boolean>;
 }) {
   return new gcp.certificatemanager.Certificate(
     `${args.logicalName}-certificate`,
@@ -151,7 +148,7 @@ function createManagedCertificate(args: {
       scope: "DEFAULT",
       description: `Windrun ${args.environmentName} managed certificate`,
       managed: {
-        domains: args.caaValidated.apply(() => args.domains),
+        domains: args.domains,
         dnsAuthorizations: [args.authorization.id],
       },
     },
@@ -160,7 +157,6 @@ function createManagedCertificate(args: {
       dependsOn: [
         args.validationRecord,
         args.certificateAuthorityRecord,
-        ...args.delegationRecords,
       ],
     },
   );
@@ -219,29 +215,12 @@ export function createDnsCertificateResources(args: {
   production: ProjectBundle;
   productionAddress: gcp.compute.GlobalAddress;
   stagingAddress: gcp.compute.GlobalAddress;
-  digitalOceanProvider: digitalocean.Provider;
   allowStagingCertificateReplacement: boolean;
 }): DnsCertificateResources {
   const dns = createDnsResources({
     shared: args.shared,
     productionAddress: args.productionAddress,
     stagingAddress: args.stagingAddress,
-    digitalOceanProvider: args.digitalOceanProvider,
-  });
-
-  const inheritedCaa = digitalocean.getRecordsOutput(
-    {
-      domain: HOSTNAMES.parentZone,
-      filters: [
-        { key: "type", values: ["CAA"] },
-        { key: "name", values: ["@"] },
-      ],
-    },
-    { provider: args.digitalOceanProvider },
-  );
-  const caaValidated = inheritedCaa.records.apply((records) => {
-    validateInheritedCaa(records);
-    return true;
   });
 
   const productionAuthorization = createAuthorization(
@@ -273,7 +252,7 @@ export function createDnsCertificateResources(args: {
     logicalName: "production",
     authorization: productionAuthorization,
     shared: args.shared,
-    zone: dns.productionZone,
+    zone: dns.apexZone,
   });
   const legacyStagingValidationRecord =
     legacyStagingAuthorization === undefined
@@ -282,13 +261,13 @@ export function createDnsCertificateResources(args: {
           logicalName: "staging",
           authorization: legacyStagingAuthorization,
           shared: args.shared,
-          zone: dns.productionZone,
+          zone: dns.apexZone,
         });
   const stagingValidationRecord = createValidationRecord({
     logicalName: "staging-app",
     authorization: stagingAuthorization,
     shared: args.shared,
-    zone: dns.stagingZone,
+    zone: dns.apexZone,
   });
   const productionCertificate = createManagedCertificate({
     logicalName: "production",
@@ -298,9 +277,7 @@ export function createDnsCertificateResources(args: {
     bundle: args.production,
     authorization: productionAuthorization,
     validationRecord: productionValidationRecord,
-    certificateAuthorityRecord: dns.productionCertificateAuthorityRecord,
-    delegationRecords: dns.delegationRecords,
-    caaValidated,
+    certificateAuthorityRecord: dns.certificateAuthorityRecord,
   });
   if (legacyStagingAuthorization !== undefined) {
     if (legacyStagingValidationRecord === undefined) {
@@ -316,9 +293,7 @@ export function createDnsCertificateResources(args: {
       bundle: args.staging,
       authorization: legacyStagingAuthorization,
       validationRecord: legacyStagingValidationRecord,
-      certificateAuthorityRecord: dns.productionCertificateAuthorityRecord,
-      delegationRecords: dns.delegationRecords,
-      caaValidated,
+      certificateAuthorityRecord: dns.certificateAuthorityRecord,
     });
   }
   const stagingCertificate = createManagedCertificate({
@@ -329,9 +304,7 @@ export function createDnsCertificateResources(args: {
     bundle: args.staging,
     authorization: stagingAuthorization,
     validationRecord: stagingValidationRecord,
-    certificateAuthorityRecord: dns.stagingCertificateAuthorityRecord,
-    delegationRecords: dns.delegationRecords,
-    caaValidated,
+    certificateAuthorityRecord: dns.certificateAuthorityRecord,
   });
   const productionCertificateMap = createCertificateMap(
     "production",

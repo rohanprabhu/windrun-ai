@@ -13,7 +13,6 @@ const configKeys = [
   "windrun-ai:allowProjectDeletion",
   "windrun-ai:enablePulumiGithubOidc",
   "windrun-ai:pulumiOrganization",
-  "windrun-ai:digitalOceanToken",
 ] as const;
 
 const stackKinds = [
@@ -36,6 +35,7 @@ const foundationOutputs = [
   "productionRuntimeServiceAccountEmail",
   "stagingGlobalIp",
   "productionGlobalIp",
+  "apexNameServers",
   "stagingCertificateMapId",
   "productionCertificateMapId",
   "stagingCertificateStatus",
@@ -167,7 +167,7 @@ describe.each(documents)("infra/%s", (fileName) => {
     expect(document).toContain("30-day recovery window");
     expect(document).toContain("project IDs can never be reused");
     expect(document).toContain(
-      "DigitalOcean delegation is deleted before Cloud DNS",
+      "Cloud DNS record sets are deleted before the apex zone",
     );
     expect(document).toContain(
       "validation CNAMEs are deleted after certificates",
@@ -185,7 +185,7 @@ describe.each(documents)("infra/%s", (fileName) => {
       "owns `.github/workflows` and executable preview, deploy, destroy, and smoke-test scripts",
     );
     expect(document).toContain(
-      "authorize no `gh`, mutating `gcloud`, or `doctl` command",
+      "authorize no `gh` or mutating `gcloud` command",
     );
     expect(document).toContain("Delivery invokes no `gh` command");
     expect(document).not.toMatch(
@@ -197,7 +197,7 @@ describe.each(documents)("infra/%s", (fileName) => {
 
     const executableCloudCliMutations = document
       .split("\n")
-      .filter((line) => /^\s*(?:\$\s*)?(?:gh|gcloud|doctl)\s+/u.test(line));
+      .filter((line) => /^\s*(?:\$\s*)?(?:gh|gcloud)\s+/u.test(line));
     expect(executableCloudCliMutations).toEqual([]);
   });
 });

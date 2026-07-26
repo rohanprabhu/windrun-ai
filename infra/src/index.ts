@@ -57,7 +57,6 @@ function run() {
           config.getBoolean("allowProjectDeletion") ?? false,
         allowStagingCertificateReplacement:
           config.getBoolean("allowStagingCertificateReplacement") ?? false,
-        digitalOceanToken: config.requireSecret("digitalOceanToken"),
       });
 
     case "delivery": {

@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
+import { parseStackContext } from "../src/config";
+
 const infraDirectory = resolve(__dirname, "..");
 const staticStacks = [
   "foundation",
@@ -23,7 +25,6 @@ const allowedProjectConfigKeys = new Set([
   "windrun-ai:productionCiEnabled",
   "windrun-ai:stagingCiEnabled",
   "windrun-ai:pulumiOrganization",
-  "windrun-ai:digitalOceanToken",
 ]);
 
 type StaticStack = (typeof staticStacks)[number];
@@ -39,6 +40,12 @@ function readStackConfig(stack: StaticStack): Record<string, unknown> {
 
   expect(document.config).toBeDefined();
   return document.config ?? {};
+}
+
+function readPackageJson() {
+  return JSON.parse(
+    readFileSync(resolve(infraDirectory, "package.json"), "utf8"),
+  ) as { dependencies?: Record<string, string> };
 }
 
 describe("static Pulumi stack configuration", () => {
@@ -69,6 +76,22 @@ describe("static Pulumi stack configuration", () => {
     );
     expect(config).not.toHaveProperty("windrun-ai:enablePulumiGithubOidc");
     expect(config).not.toHaveProperty("windrun-ai:pulumiOrganization");
+    expect(config).not.toHaveProperty("windrun-ai:digitalOceanToken");
+  });
+
+  it("does not allow DigitalOcean credentials in stack config", () => {
+    expect(() =>
+      parseStackContext("foundation", {
+        stackKind: "foundation",
+        digitalOceanToken: "token",
+      } as never),
+    ).toThrow("digitalOceanToken is not valid for foundation");
+  });
+
+  it("does not depend on the DigitalOcean Pulumi provider", () => {
+    const packageJson = readPackageJson();
+
+    expect(packageJson.dependencies).not.toHaveProperty("@pulumi/digitalocean");
   });
 
   it("keeps delivery OIDC disabled until the Pulumi organization is claimed", () => {
@@ -105,7 +128,7 @@ describe("static Pulumi stack configuration", () => {
   });
 
   it.each(staticStacks)(
-    "uses only the seven-key Windrun config contract in %s",
+    "uses only the six-key Windrun config contract in %s",
     (stack) => {
       const projectKeys = Object.keys(readStackConfig(stack)).filter((key) =>
         key.startsWith("windrun-ai:"),

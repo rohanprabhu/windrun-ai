@@ -5,7 +5,6 @@ import type { FoundationOutputs } from "../foundation-outputs";
 import { createBootstrapProvider } from "../providers";
 import { createDnsCertificateResources } from "./certificates";
 import { createFoundationCoreResources } from "./core";
-import { createDigitalOceanProvider } from "./dns";
 import { createGitHubDeploymentIdentities } from "./github-wif";
 import { createProjectBundle } from "./projects";
 import { SHARED_APIS, WORKLOAD_APIS } from "./services";
@@ -13,7 +12,10 @@ import { SHARED_APIS, WORKLOAD_APIS } from "./services";
 export interface FoundationStackArgs {
   allowProjectDeletion: boolean;
   allowStagingCertificateReplacement: boolean;
-  digitalOceanToken: pulumi.Input<string>;
+}
+
+export interface FoundationStackOutputs extends FoundationOutputs {
+  apexNameServers: pulumi.Output<string[]>;
 }
 
 const stagingHostnameMigrationResources = new Set([
@@ -46,7 +48,7 @@ function registerFoundationProtection(args: {
 
 export function createFoundationStack(
   args: FoundationStackArgs,
-): FoundationOutputs {
+): FoundationStackOutputs {
   registerFoundationProtection({
     allowProjectDeletion: args.allowProjectDeletion,
     allowStagingCertificateReplacement:
@@ -76,16 +78,12 @@ export function createFoundationStack(
     services: WORKLOAD_APIS,
   });
   const core = createFoundationCoreResources({ staging, production });
-  const digitalOceanProvider = createDigitalOceanProvider(
-    args.digitalOceanToken,
-  );
   const certificates = createDnsCertificateResources({
     shared,
     staging,
     production,
     productionAddress: core.productionAddress,
     stagingAddress: core.stagingAddress,
-    digitalOceanProvider,
     allowStagingCertificateReplacement:
       args.allowStagingCertificateReplacement,
   });
@@ -102,6 +100,7 @@ export function createFoundationStack(
   const identities = deployment.identities;
 
   return {
+    apexNameServers: certificates.apexNameServers,
     sharedProjectId: shared.project.projectId,
     stagingProjectId: staging.project.projectId,
     productionProjectId: production.project.projectId,

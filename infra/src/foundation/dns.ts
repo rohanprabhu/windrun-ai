@@ -1,4 +1,3 @@
-import * as digitalocean from "@pulumi/digitalocean";
 import * as gcp from "@pulumi/gcp";
 import * as pulumi from "@pulumi/pulumi";
 
@@ -7,167 +6,122 @@ import type { ProjectBundle } from "./projects";
 import { requireProjectService } from "./services";
 
 export interface DnsResources {
-  productionZone: gcp.dns.ManagedZone;
-  stagingZone: gcp.dns.ManagedZone;
-  delegationRecords: digitalocean.DnsRecord[];
+  apexZone: gcp.dns.ManagedZone;
+  apexNameServers: pulumi.Output<string[]>;
   productionAddressRecord: gcp.dns.RecordSet;
   stagingAddressRecord: gcp.dns.RecordSet;
   previewAddressRecord: gcp.dns.RecordSet;
-  productionCertificateAuthorityRecord: gcp.dns.RecordSet;
-  stagingCertificateAuthorityRecord: gcp.dns.RecordSet;
+  certificateAuthorityRecord: gcp.dns.RecordSet;
+  businessRecords: gcp.dns.RecordSet[];
 }
 
-export function createDigitalOceanProvider(token?: pulumi.Input<string>) {
-  const providerToken =
-    token ?? new pulumi.Config().requireSecret("digitalOceanToken");
-  return new digitalocean.Provider("digitalocean-windrun", {
-    token: providerToken,
-  });
-}
+const preservedBusinessRecords = [
+  {
+    logicalName: "business-mx-record",
+    name: HOSTNAMES.apexZone,
+    type: "MX",
+    ttl: 300,
+    rrdatas: ["1 smtp.google.com."],
+  },
+  {
+    logicalName: "business-google-site-verification-record",
+    name: HOSTNAMES.apexZone,
+    type: "TXT",
+    ttl: 300,
+    rrdatas: [
+      '"google-site-verification=RNjfWKrI2EKntfBF5bUNllfn_wLNKSYAvSN_UCuYOng"',
+    ],
+  },
+] as const;
 
 export function createDnsResources(args: {
   shared: ProjectBundle;
   productionAddress: gcp.compute.GlobalAddress;
   stagingAddress: gcp.compute.GlobalAddress;
-  digitalOceanProvider: digitalocean.Provider;
 }): DnsResources {
   const dnsApi = requireProjectService(
     args.shared.services,
     "dns.googleapis.com",
   );
-  const productionZone = new gcp.dns.ManagedZone(
-    "app-zone",
+  const apexZone = new gcp.dns.ManagedZone(
+    "apex-zone",
     {
       project: args.shared.project.projectId,
-      name: "windrun-app",
-      dnsName: HOSTNAMES.productionZone,
-      description: "Delegated public zone for Windrun applications",
+      name: "windrun-apex",
+      dnsName: HOSTNAMES.apexZone,
+      description: "Authoritative public zone for Windrun",
       visibility: "public",
       forceDestroy: true,
     },
     { provider: args.shared.provider, dependsOn: [dnsApi] },
   );
 
-  const stagingZone = new gcp.dns.ManagedZone(
-    "staging-zone",
-    {
-      project: args.shared.project.projectId,
-      name: "windrun-staging",
-      dnsName: HOSTNAMES.stagingZone,
-      description: "Delegated public zone for Windrun staging applications",
-      visibility: "public",
-      forceDestroy: true,
-    },
-    { provider: args.shared.provider, dependsOn: [dnsApi] },
-  );
-
-  function createDelegationRecords(
-    label: "app" | "staging",
-    zone: gcp.dns.ManagedZone,
-  ) {
-    const assignedNameServers = zone.nameServers.apply((nameServers) => {
-      if (nameServers.length !== 4) {
-        throw new Error(
-          `Cloud DNS ${label} zone must assign exactly four name servers, received ${nameServers.length}`,
-        );
-      }
-      return nameServers;
-    });
-
-    return Array.from({ length: 4 }, (_, index) =>
-      new digitalocean.DnsRecord(
-        `${label}-ns-${index + 1}`,
-        {
-          domain: HOSTNAMES.parentZone,
-          type: "NS",
-          name: label,
-          ttl: 1800,
-          value: assignedNameServers.apply((nameServers) => nameServers[index]),
-        },
-        { provider: args.digitalOceanProvider, dependsOn: [zone] },
-      ),
-    );
-  }
-
-  const delegationRecords = [
-    ...createDelegationRecords("app", productionZone),
-    ...createDelegationRecords("staging", stagingZone),
-  ];
-
-  function addressRecord(
+  function recordSet(
     logicalName: string,
-    zone: gcp.dns.ManagedZone,
     name: string,
-    address: pulumi.Input<string>,
+    type: string,
+    ttl: number,
+    rrdatas: pulumi.Input<pulumi.Input<string>[]>,
   ) {
     return new gcp.dns.RecordSet(
       logicalName,
       {
         project: args.shared.project.projectId,
-        managedZone: zone.name,
+        managedZone: apexZone.name,
         name,
-        type: "A",
-        ttl: 300,
-        rrdatas: [address],
+        type,
+        ttl,
+        rrdatas,
       },
-      { provider: args.shared.provider, dependsOn: [dnsApi, zone] },
+      { provider: args.shared.provider, dependsOn: [dnsApi, apexZone] },
     );
   }
 
-  const productionAddressRecord = addressRecord(
+  const productionAddressRecord = recordSet(
     "production-a-record",
-    productionZone,
     `${HOSTNAMES.production}.`,
-    args.productionAddress.address,
+    "A",
+    300,
+    [args.productionAddress.address],
   );
-  const stagingAddressRecord = addressRecord(
+  const stagingAddressRecord = recordSet(
     "staging-a-record",
-    stagingZone,
     `${HOSTNAMES.staging}.`,
-    args.stagingAddress.address,
+    "A",
+    300,
+    [args.stagingAddress.address],
   );
-  const previewAddressRecord = addressRecord(
+  const previewAddressRecord = recordSet(
     "preview-a-record",
-    stagingZone,
     `*.${HOSTNAMES.staging}.`,
-    args.stagingAddress.address,
+    "A",
+    300,
+    [args.stagingAddress.address],
   );
-
-  function certificateAuthorityRecord(
-    logicalName: string,
-    zone: gcp.dns.ManagedZone,
-    zoneName: string,
-  ) {
-    return new gcp.dns.RecordSet(
-      logicalName,
-      {
-        project: args.shared.project.projectId,
-        managedZone: zone.name,
-        name: zoneName,
-        type: "CAA",
-        ttl: 300,
-        rrdatas: ['0 issue "pki.goog"', '0 issuewild "pki.goog"'],
-      },
-      { provider: args.shared.provider, dependsOn: [dnsApi, zone] },
-    );
-  }
+  const certificateAuthorityRecord = recordSet(
+    "certificate-authority-record",
+    HOSTNAMES.apexZone,
+    "CAA",
+    300,
+    ['0 issue "pki.goog"', '0 issuewild "pki.goog"'],
+  );
+  const businessRecords = preservedBusinessRecords.map((record) =>
+    recordSet(
+      record.logicalName,
+      record.name,
+      record.type,
+      record.ttl,
+      [...record.rrdatas],
+    ),
+  );
 
   return {
-    productionZone,
-    stagingZone,
-    delegationRecords,
+    apexZone,
+    apexNameServers: apexZone.nameServers,
     productionAddressRecord,
     stagingAddressRecord,
     previewAddressRecord,
-    productionCertificateAuthorityRecord: certificateAuthorityRecord(
-      "certificate-authority-record",
-      productionZone,
-      HOSTNAMES.productionZone,
-    ),
-    stagingCertificateAuthorityRecord: certificateAuthorityRecord(
-      "staging-certificate-authority-record",
-      stagingZone,
-      HOSTNAMES.stagingZone,
-    ),
+    certificateAuthorityRecord,
+    businessRecords,
   };
 }
